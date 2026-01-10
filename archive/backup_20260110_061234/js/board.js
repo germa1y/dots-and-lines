@@ -1,0 +1,2102 @@
+/**
+ * board.js - Canvas rendering and game board visualization
+ * Handles canvas setup, scaling, grid rendering, and user interactions
+ *
+ * Enhanced Input Mechanics:
+ * - Single-click: First click ACTIVATES dot (pulsating), second click on adjacent dot completes line
+ * - Drag & drop: Drag from dot, line follows cursor, snaps to legal connecting dot
+ */
+
+// Canvas and context
+let canvas;
+let ctx;
+let pixelRatio = 1;
+
+// Canvas dimensions
+let canvasWidth;
+let canvasHeight;
+
+// Game constants
+const GRID_SIZE = 6; // 5 boxes = 6 dots per side
+const DOT_RADIUS = 6; // Radius of dots in pixels
+const DOT_RADIUS_ACTIVE = 10; // Larger radius for activated dot
+const LINE_WIDTH = 4; // Width of lines in pixels
+const SNAP_DISTANCE = 30; // Distance threshold for snapping to a dot during drag
+
+// Grid layout variables (calculated on resize)
+let gridSpacing; // Distance between dots
+let gridOffsetX; // X offset to center the grid
+let gridOffsetY; // Y offset to center the grid
+
+// Canvas container pulsing animation state
+let pulseAnimationId = null;
+let containerPulsePhase = 0;
+
+// Pulsation parameters (adjustable via debug panel)
+let pulseParams = {
+    speed: 0.002,      // How fast the pulse moves (0.0001 - 0.05)
+    frequency: 4,       // Number of rings (1 - 5)
+    thickness: 1,       // Width of the bright ring in % (0 - 100)
+    innerFadeWidth: 14, // Inner fade/gradient width in % (0 - 100)
+    outerFadeWidth: 14, // Outer fade/gradient width in % (0 - 100)
+    opacity: 0.2,       // Overall opacity of the effect (0.05 - 1.0)
+    ringBrightness: [15, 35, 25, 45] // Brightness for each ring (0=white, 50=player color, 100=black)
+};
+
+// Set to true to show the pulse settings debug panel
+const SHOW_PULSE_DEBUG_PANEL = false;
+
+/**
+ * Create or update the pulse debug control panel
+ * @param {boolean} show - Whether to show or hide the panel
+ * @param {string} baseColor - The base color for preview
+ */
+function updatePulseDebugPanel(show, baseColor) {
+    // Check if debug panel is enabled
+    if (!SHOW_PULSE_DEBUG_PANEL) {
+        let panel = document.getElementById('pulse-debug-panel');
+        if (panel) panel.style.display = 'none';
+        return;
+    }
+
+    let panel = document.getElementById('pulse-debug-panel');
+
+    if (!show) {
+        if (panel) panel.style.display = 'none';
+        return;
+    }
+
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'pulse-debug-panel';
+        panel.innerHTML = `
+            <div style="font-weight:bold;margin-bottom:10px;border-bottom:1px solid #555;padding-bottom:5px;">Pulse Settings</div>
+
+            <label>Speed: <span id="pulse-speed-val">${pulseParams.speed}</span></label>
+            <input type="range" id="pulse-speed" min="0.0001" max="0.05" step="0.0001" value="${pulseParams.speed}">
+
+            <label>Frequency (rings): <span id="pulse-frequency-val">${pulseParams.frequency}</span></label>
+            <input type="range" id="pulse-frequency" min="1" max="4" step="1" value="${pulseParams.frequency}">
+
+            <label>Ring Thickness: <span id="pulse-thickness-val">${pulseParams.thickness}%</span></label>
+            <input type="range" id="pulse-thickness" min="0" max="100" step="1" value="${pulseParams.thickness}">
+
+            <label>Inner Fade Width: <span id="pulse-inner-fade-val">${pulseParams.innerFadeWidth}%</span></label>
+            <input type="range" id="pulse-inner-fade" min="0" max="100" step="1" value="${pulseParams.innerFadeWidth}">
+
+            <label>Outer Fade Width: <span id="pulse-outer-fade-val">${pulseParams.outerFadeWidth}%</span></label>
+            <input type="range" id="pulse-outer-fade" min="0" max="100" step="1" value="${pulseParams.outerFadeWidth}">
+
+            <label>Opacity: <span id="pulse-opacity-val">${pulseParams.opacity}</span></label>
+            <input type="range" id="pulse-opacity" min="0.05" max="1.0" step="0.05" value="${pulseParams.opacity}">
+
+            <div id="ring-colors-container" style="margin-top:10px;border-top:1px solid #555;padding-top:10px;">
+                <div style="font-weight:bold;margin-bottom:8px;">Ring Brightness</div>
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:4px;">
+                    <span>White</span>
+                    <span>Player</span>
+                    <span>Black</span>
+                </div>
+                ${[1,2,3,4].map(i => `
+                    <div class="ring-color-row" data-ring="${i}" style="display:${i <= pulseParams.frequency ? 'flex' : 'none'};align-items:center;gap:8px;margin-bottom:6px;">
+                        <label style="margin:0;min-width:50px;">Ring ${i}:</label>
+                        <input type="range" id="ring-brightness-${i}" min="0" max="100" step="1" value="${pulseParams.ringBrightness[i-1]}" style="flex:1;">
+                        <span id="ring-brightness-val-${i}" style="min-width:30px;text-align:right;">${pulseParams.ringBrightness[i-1]}%</span>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div style="margin-top:10px;font-size:11px;color:#888;">
+                Adjust sliders to modify pulse effect
+            </div>
+        `;
+        panel.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.85);
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 9999;
+            min-width: 200px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        `;
+
+        // Style for labels and inputs
+        const style = document.createElement('style');
+        style.textContent = `
+            #pulse-debug-panel label {
+                display: block;
+                margin: 8px 0 4px 0;
+                color: #ccc;
+            }
+            #pulse-debug-panel input[type="range"] {
+                width: 100%;
+                cursor: pointer;
+            }
+            #pulse-debug-panel span {
+                color: #4ecdc4;
+                float: right;
+            }
+        `;
+        document.head.appendChild(style);
+        document.body.appendChild(panel);
+
+        // Add event listeners
+        document.getElementById('pulse-speed').addEventListener('input', (e) => {
+            pulseParams.speed = parseFloat(e.target.value);
+            document.getElementById('pulse-speed-val').textContent = pulseParams.speed;
+        });
+        document.getElementById('pulse-frequency').addEventListener('input', (e) => {
+            pulseParams.frequency = parseInt(e.target.value);
+            document.getElementById('pulse-frequency-val').textContent = pulseParams.frequency;
+            // Show/hide ring color rows based on frequency
+            for (let i = 1; i <= 4; i++) {
+                const row = document.querySelector(`.ring-color-row[data-ring="${i}"]`);
+                if (row) {
+                    row.style.display = i <= pulseParams.frequency ? 'flex' : 'none';
+                }
+            }
+        });
+        document.getElementById('pulse-thickness').addEventListener('input', (e) => {
+            pulseParams.thickness = parseInt(e.target.value);
+            document.getElementById('pulse-thickness-val').textContent = pulseParams.thickness + '%';
+        });
+        document.getElementById('pulse-inner-fade').addEventListener('input', (e) => {
+            pulseParams.innerFadeWidth = parseInt(e.target.value);
+            document.getElementById('pulse-inner-fade-val').textContent = pulseParams.innerFadeWidth + '%';
+        });
+        document.getElementById('pulse-outer-fade').addEventListener('input', (e) => {
+            pulseParams.outerFadeWidth = parseInt(e.target.value);
+            document.getElementById('pulse-outer-fade-val').textContent = pulseParams.outerFadeWidth + '%';
+        });
+        document.getElementById('pulse-opacity').addEventListener('input', (e) => {
+            pulseParams.opacity = parseFloat(e.target.value);
+            document.getElementById('pulse-opacity-val').textContent = pulseParams.opacity;
+        });
+
+        // Ring brightness sliders
+        for (let i = 1; i <= 4; i++) {
+            document.getElementById(`ring-brightness-${i}`).addEventListener('input', (e) => {
+                pulseParams.ringBrightness[i - 1] = parseInt(e.target.value);
+                document.getElementById(`ring-brightness-val-${i}`).textContent = pulseParams.ringBrightness[i - 1] + '%';
+            });
+        }
+    }
+
+    panel.style.display = 'block';
+}
+
+/**
+ * Parse a hex color to RGB components
+ * @param {string} hex - Hex color string (#RRGGBB or #RGB)
+ * @returns {{r: number, g: number, b: number}}
+ */
+function hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (result) {
+        return {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        };
+    }
+    // Handle shorthand #RGB
+    const short = /^#?([a-f\d])([a-f\d])([a-f\d])$/i.exec(hex);
+    if (short) {
+        return {
+            r: parseInt(short[1] + short[1], 16),
+            g: parseInt(short[2] + short[2], 16),
+            b: parseInt(short[3] + short[3], 16)
+        };
+    }
+    return { r: 128, g: 128, b: 128 }; // Default gray
+}
+
+/**
+ * Convert RGB to hex color
+ * @param {number} r - Red (0-255)
+ * @param {number} g - Green (0-255)
+ * @param {number} b - Blue (0-255)
+ * @returns {string} Hex color string
+ */
+function rgbToHex(r, g, b) {
+    return '#' + [r, g, b].map(x => {
+        const hex = Math.round(Math.max(0, Math.min(255, x))).toString(16);
+        return hex.length === 1 ? '0' + hex : hex;
+    }).join('');
+}
+
+/**
+ * Darken a color by a percentage
+ * @param {string} hex - Hex color string
+ * @param {number} percent - Percentage to darken (0-100)
+ * @returns {string} Darkened hex color
+ */
+function darkenColor(hex, percent) {
+    const rgb = hexToRgb(hex);
+    const factor = 1 - (percent / 100);
+    return rgbToHex(rgb.r * factor, rgb.g * factor, rgb.b * factor);
+}
+
+/**
+ * Brighten a color by a percentage
+ * @param {string} hex - Hex color string
+ * @param {number} percent - Percentage to brighten (0-100)
+ * @returns {string} Brightened hex color
+ */
+function brightenColor(hex, percent) {
+    const rgb = hexToRgb(hex);
+    const factor = percent / 100;
+    return rgbToHex(
+        rgb.r + (255 - rgb.r) * factor,
+        rgb.g + (255 - rgb.g) * factor,
+        rgb.b + (255 - rgb.b) * factor
+    );
+}
+
+/**
+ * Convert hex color to RGBA string with opacity
+ * @param {string} hex - Hex color string
+ * @param {number} opacity - Opacity value (0-1)
+ * @returns {string} RGBA color string
+ */
+function hexToRgba(hex, opacity) {
+    const rgb = hexToRgb(hex);
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`;
+}
+
+/**
+ * Calculate ring color based on brightness slider value
+ * 0 = white, 50 = player color, 100 = black
+ * @param {string} playerColor - The player's base color (hex)
+ * @param {number} brightness - Brightness value (0-100)
+ * @returns {string} Calculated hex color
+ */
+function getRingColorFromBrightness(playerColor, brightness) {
+    const playerRgb = hexToRgb(playerColor);
+
+    if (brightness <= 50) {
+        // Interpolate from white (0) to player color (50)
+        const factor = brightness / 50; // 0 to 1
+        return rgbToHex(
+            255 - (255 - playerRgb.r) * factor,
+            255 - (255 - playerRgb.g) * factor,
+            255 - (255 - playerRgb.b) * factor
+        );
+    } else {
+        // Interpolate from player color (50) to black (100)
+        const factor = (brightness - 50) / 50; // 0 to 1
+        return rgbToHex(
+            playerRgb.r * (1 - factor),
+            playerRgb.g * (1 - factor),
+            playerRgb.b * (1 - factor)
+        );
+    }
+}
+
+/**
+ * Update the canvas container background based on current player
+ * @param {string} playerColor - The current player's color
+ * @param {number} bankedTurns - Number of banked turns for current player
+ * @param {boolean} isLocalPlayer - Whether the current player is the local player
+ */
+function updateCanvasContainerStyle(playerColor, bankedTurns, isLocalPlayer) {
+    const container = document.querySelector('.canvas-container');
+    if (!container) return;
+
+    // Base color: 75% darker than player color
+    const baseColor = darkenColor(playerColor, 75);
+
+    // Stop any existing animation
+    if (pulseAnimationId) {
+        cancelAnimationFrame(pulseAnimationId);
+        pulseAnimationId = null;
+    }
+
+    // Only show pulse effect if it's the local player's turn AND they have banked turns
+    if (bankedTurns > 0 && isLocalPlayer) {
+        // Show debug panel when pulsation is active
+        updatePulseDebugPanel(true, baseColor);
+
+        // Radial pulsation - outward only, multiple rings starting from center
+        function animatePulse() {
+            // Update phase with speed
+            containerPulsePhase += pulseParams.speed;
+
+            // Get opacity for RGBA colors (only affects background, not game elements)
+            const opacity = pulseParams.opacity;
+
+            // Build gradient with multiple rings based on frequency
+            const gradientStops = [];
+            const cycleLength = 100 / pulseParams.frequency; // Space between rings
+
+            // Convert base color to RGBA with opacity
+            const baseColorRgba = hexToRgba(baseColor, opacity);
+
+            for (let i = 0; i < pulseParams.frequency; i++) {
+                // Get ring color from brightness slider (0=white, 50=player color, 100=black)
+                const ringColorHex = getRingColorFromBrightness(playerColor, pulseParams.ringBrightness[i]);
+                const ringColorRgba = hexToRgba(ringColorHex, opacity);
+
+                // Each ring is offset by its index
+                const ringOffset = (i / pulseParams.frequency);
+                const pulseAmount = ((containerPulsePhase + ringOffset) % 1); // 0 to 1, repeating
+
+                // Ring expands from 0% (center) to 100%+ (past edge)
+                const ringCenter = pulseAmount * 120; // 0% to 120%
+
+                // Calculate ring positions - starts from absolute center
+                // Inner fade goes from base color to ring color
+                const innerFadeStart = Math.max(0, ringCenter - pulseParams.thickness / 2 - pulseParams.innerFadeWidth);
+                const ringStart = Math.max(0, ringCenter - pulseParams.thickness / 2);
+                const ringEnd = ringCenter + pulseParams.thickness / 2;
+                // Outer fade goes from ring color back to base color
+                const outerFadeEnd = ringCenter + pulseParams.thickness / 2 + pulseParams.outerFadeWidth;
+
+                // Add gradient stops for this ring (inner fade -> ring -> outer fade)
+                if (innerFadeStart >= 0 && innerFadeStart <= 100) {
+                    gradientStops.push({ pos: innerFadeStart, color: baseColorRgba });
+                }
+                if (ringStart >= 0 && ringStart <= 100) {
+                    gradientStops.push({ pos: ringStart, color: ringColorRgba });
+                }
+                if (ringEnd >= 0 && ringEnd <= 100) {
+                    gradientStops.push({ pos: ringEnd, color: ringColorRgba });
+                }
+                if (outerFadeEnd >= 0 && outerFadeEnd <= 100) {
+                    gradientStops.push({ pos: outerFadeEnd, color: baseColorRgba });
+                }
+            }
+
+            // Sort stops by position
+            gradientStops.sort((a, b) => a.pos - b.pos);
+
+            // Build gradient string with RGBA colors (opacity baked in)
+            let gradientStr = `radial-gradient(circle at center, ${baseColorRgba} 0%`;
+            gradientStops.forEach(stop => {
+                gradientStr += `, ${stop.color} ${stop.pos}%`;
+            });
+            gradientStr += `, ${baseColorRgba} 100%)`;
+
+            container.style.background = gradientStr;
+            container.style.opacity = 1; // Keep container fully opaque
+
+            pulseAnimationId = requestAnimationFrame(animatePulse);
+        }
+        animatePulse();
+    } else {
+        // Hide debug panel when no banked turns
+        updatePulseDebugPanel(false);
+
+        // Static color when no banked turns
+        container.style.background = baseColor;
+        container.style.opacity = 1.0;
+    }
+}
+
+// Game state (will be synced with backend later)
+let lines = []; // Array of line objects: { row, col, direction, ownerId }
+let boxes = []; // Array of box objects: { row, col, ownerId }
+let currentPlayer = 0; // Current player index (for testing, will come from backend)
+let turnCounter = 0; // Track turns for special square movement
+let nextMoveTurn = getRandomMoveTurn(); // Next turn to move special squares (3-5 turns)
+
+// Special squares state (local mode only - multiplayer uses GameService)
+let localSpecialSquares = {
+    golden: [],
+    penalty: []
+};
+
+// Enhanced input state
+let activeDot = null; // Currently activated dot: { row, col } or null
+let isDragging = false; // Whether we're in drag mode
+let dragStartDot = null; // Dot where drag started: { row, col }
+let dragCurrentPos = null; // Current drag position: { x, y } in canvas coords
+let dragSnapDot = null; // Dot we're snapping to: { row, col } or null
+
+// Animation state
+let animationFrameId = null; // For pulsating animation
+let pulsePhase = 0; // Animation phase for pulsating effect
+
+// Players (for testing, will come from backend)
+// Ensure players get unique colors
+function getUniquePlayers() {
+    const color1 = PLAYER_COLORS[0];
+    let color2 = PLAYER_COLORS[1];
+
+    // Ensure second player has different color
+    if (color1 === color2) {
+        color2 = PLAYER_COLORS[2] || PLAYER_COLORS[1];
+    }
+
+    return [
+        { id: 0, name: 'Player 1', color: color1, score: 0 },
+        { id: 1, name: 'Player 2', color: color2, score: 0 }
+    ];
+}
+
+let players = getUniquePlayers();
+
+/**
+ * Initialize canvas and set up event listeners
+ */
+function initCanvas() {
+    canvas = document.getElementById('game-canvas');
+    if (!canvas) {
+        console.error('Canvas element not found');
+        return;
+    }
+
+    ctx = canvas.getContext('2d');
+    if (!ctx) {
+        console.error('Could not get canvas context');
+        return;
+    }
+
+    // Set up resize handling
+    window.addEventListener('resize', handleResize);
+
+    // Set up input event listeners
+    setupInputListeners();
+
+    // Initial resize to set canvas size
+    handleResize();
+
+    // Initialize scoreboard
+    updateScoreboard();
+
+    console.log('Canvas initialized:', { width: canvasWidth, height: canvasHeight, pixelRatio });
+}
+
+/**
+ * Set up touch and mouse event listeners for enhanced input
+ * Supports both single-click (tap) and drag-and-drop modes
+ */
+function setupInputListeners() {
+    // Mouse events for drag-and-drop
+    canvas.addEventListener('mousedown', handlePointerDown);
+    canvas.addEventListener('mousemove', handlePointerMove);
+    canvas.addEventListener('mouseup', handlePointerUp);
+    canvas.addEventListener('mouseleave', handlePointerCancel);
+
+    // Touch events for mobile drag-and-drop
+    canvas.addEventListener('touchstart', handleTouchStartEnhanced, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMoveEnhanced, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEndEnhanced, { passive: false });
+    canvas.addEventListener('touchcancel', handlePointerCancel);
+}
+
+/**
+ * Handle window resize and recalculate canvas dimensions
+ */
+function handleResize() {
+    const container = canvas.parentElement;
+
+    // Get the container's dimensions
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+
+    // Calculate pixel ratio for sharp rendering on high-DPI displays
+    pixelRatio = window.devicePixelRatio || 1;
+
+    // Set display size (CSS pixels)
+    canvas.style.width = containerWidth + 'px';
+    canvas.style.height = containerHeight + 'px';
+
+    // Set actual canvas size (backing store pixels)
+    canvas.width = containerWidth * pixelRatio;
+    canvas.height = containerHeight * pixelRatio;
+
+    // Scale context to account for pixel ratio
+    ctx.scale(pixelRatio, pixelRatio);
+
+    // Store logical dimensions (CSS pixels)
+    canvasWidth = containerWidth;
+    canvasHeight = containerHeight;
+
+    // Calculate grid layout
+    calculateGridLayout();
+
+    // Redraw the board with new dimensions
+    redraw();
+}
+
+/**
+ * Calculate grid layout based on canvas dimensions
+ * Centers the grid and calculates spacing between dots
+ */
+function calculateGridLayout() {
+    // Calculate the maximum available space for the grid
+    const padding = 40; // Padding around the grid
+    const availableWidth = canvasWidth - (padding * 2);
+    const availableHeight = canvasHeight - (padding * 2);
+
+    // Calculate spacing based on the smaller dimension to ensure grid fits
+    const maxSpacingWidth = availableWidth / (GRID_SIZE - 1);
+    const maxSpacingHeight = availableHeight / (GRID_SIZE - 1);
+    gridSpacing = Math.min(maxSpacingWidth, maxSpacingHeight);
+
+    // Calculate total grid size
+    const gridWidth = gridSpacing * (GRID_SIZE - 1);
+    const gridHeight = gridSpacing * (GRID_SIZE - 1);
+
+    // Center the grid
+    gridOffsetX = (canvasWidth - gridWidth) / 2;
+    gridOffsetY = (canvasHeight - gridHeight) / 2;
+
+    console.log('Grid layout calculated:', {
+        spacing: gridSpacing,
+        offsetX: gridOffsetX,
+        offsetY: gridOffsetY,
+        gridWidth,
+        gridHeight
+    });
+}
+
+/**
+ * Clear the canvas
+ */
+function clearCanvas() {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+}
+
+/**
+ * Main redraw function - clears and redraws the entire board
+ */
+function redraw() {
+    clearCanvas();
+
+    // Draw game elements in order (boxes behind lines, then drag preview)
+    drawSpecialSquareIndicators(); // Special square markers (before boxes)
+    drawBoxes(); // Filled boxes (behind everything)
+    drawLines(); // Lines drawn by players
+    drawDragPreview(); // Preview line during drag
+    drawDots(); // Grid dots (on top so they're clickable)
+
+    // Update canvas container color for active player
+    updateCanvasContainerColor();
+}
+
+/**
+ * Darken a hex color by a percentage
+ * @param {string} color - Hex color (e.g., '#FF0000')
+ * @param {number} percent - Percentage to darken (0-100)
+ * @returns {string} Darkened hex color
+ */
+function darkenColor(color, percent) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+
+    const factor = 1 - (percent / 100);
+    const newR = Math.round(r * factor);
+    const newG = Math.round(g * factor);
+    const newB = Math.round(b * factor);
+
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Brighten a hex color by a percentage
+ * @param {string} color - Hex color (e.g., '#FF0000')
+ * @param {number} percent - Percentage to brighten (0-100)
+ * @returns {string} Brightened hex color
+ */
+function brightenColor(color, percent) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+
+    const factor = percent / 100;
+    const newR = Math.min(255, Math.round(r + (255 - r) * factor));
+    const newG = Math.min(255, Math.round(g + (255 - g) * factor));
+    const newB = Math.min(255, Math.round(b + (255 - b) * factor));
+
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Update the canvas container background color to match active player (50% darker)
+ */
+function updateCanvasContainerColor() {
+    const canvasContainer = canvas.parentElement;
+    if (!canvasContainer) return;
+
+    // Check if we're on the game screen
+    const gameScreen = document.getElementById('game-screen');
+    const isGameActive = gameScreen && !gameScreen.classList.contains('hidden');
+
+    if (isGameActive && players && players[currentPlayer]) {
+        const playerColor = players[currentPlayer].color || '#0F3460';
+        const darkenedColor = darkenColor(playerColor, 75); // 75% darker
+        canvasContainer.style.backgroundColor = darkenedColor;
+    } else {
+        // Reset to default color when not in game
+        canvasContainer.style.backgroundColor = '';
+    }
+}
+
+/**
+ * Draw special square indicators (golden and penalty)
+ * Shows visual markers for uncompleted special squares as solid colored insets
+ */
+function drawSpecialSquareIndicators() {
+    // Get special squares from GameService if in multiplayer, otherwise use local
+    let specialSquares = { golden: [], penalty: [] };
+    if (typeof GameService !== 'undefined' && GameService.getSpecialSquares) {
+        specialSquares = GameService.getSpecialSquares();
+    } else {
+        // Use local special squares for single-player mode
+        validateSpecialSquares(); // Ensure counts are correct before drawing
+        specialSquares = localSpecialSquares;
+    }
+
+    // Helper to check if box is already completed
+    const isCompleted = (key) => {
+        return boxes.some(b => `${b.row},${b.col}` === key);
+    };
+
+    const INSET_MARGIN = 8; // Pixels to inset from box edges
+
+    // Draw golden square indicators (solid gold inset square + star icon)
+    if (specialSquares.golden && specialSquares.golden.length > 0) {
+        ctx.save();
+        specialSquares.golden.forEach(key => {
+            if (!isCompleted(key)) {
+                const [row, col] = key.split(',').map(Number);
+                const topLeft = getDotPosition(row, col);
+                const bottomRight = getDotPosition(row + 1, col + 1);
+
+                const width = bottomRight.x - topLeft.x;
+                const height = bottomRight.y - topLeft.y;
+                const centerX = topLeft.x + width / 2;
+                const centerY = topLeft.y + height / 2;
+
+                // Draw solid gold inset square (smaller than box) with 25% opacity
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.25)'; // Gold at 25% opacity
+                ctx.fillRect(
+                    topLeft.x + INSET_MARGIN,
+                    topLeft.y + INSET_MARGIN,
+                    width - (INSET_MARGIN * 2),
+                    height - (INSET_MARGIN * 2)
+                );
+
+                // Draw gold star icon in center (original size, 25% darker)
+                const radius = Math.min(width, height) * 0.25; // Original size
+                drawStar(centerX, centerY, 5, radius, radius * 0.5, '#BFA100'); // 25% darker gold
+            }
+        });
+        ctx.restore();
+    }
+
+    // Draw penalty square indicators (solid red inset square + X icon)
+    if (specialSquares.penalty && specialSquares.penalty.length > 0) {
+        ctx.save();
+        specialSquares.penalty.forEach(key => {
+            if (!isCompleted(key)) {
+                const [row, col] = key.split(',').map(Number);
+                const topLeft = getDotPosition(row, col);
+                const bottomRight = getDotPosition(row + 1, col + 1);
+
+                const width = bottomRight.x - topLeft.x;
+                const height = bottomRight.y - topLeft.y;
+                const centerX = topLeft.x + width / 2;
+                const centerY = topLeft.y + height / 2;
+
+                // Draw solid red inset square (smaller than box) with 25% opacity
+                ctx.fillStyle = 'rgba(255, 68, 68, 0.25)'; // Red at 25% opacity
+                ctx.fillRect(
+                    topLeft.x + INSET_MARGIN,
+                    topLeft.y + INSET_MARGIN,
+                    width - (INSET_MARGIN * 2),
+                    height - (INSET_MARGIN * 2)
+                );
+
+                // Draw red X icon in center (50% smaller, 200% thicker, 25% darker)
+                const size = Math.min(width, height) * 0.125; // Reduced from 0.25 to 0.125 (50% smaller)
+                ctx.lineCap = 'round';
+
+                // Draw black stroke outline first (slightly thicker)
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 14; // Slightly thicker for outline effect
+                ctx.beginPath();
+                ctx.moveTo(centerX - size, centerY - size);
+                ctx.lineTo(centerX + size, centerY + size);
+                ctx.moveTo(centerX + size, centerY - size);
+                ctx.lineTo(centerX - size, centerY + size);
+                ctx.stroke();
+
+                // Draw red X on top
+                ctx.strokeStyle = '#BF3333'; // 25% darker red
+                ctx.lineWidth = 12;
+                ctx.beginPath();
+                ctx.moveTo(centerX - size, centerY - size);
+                ctx.lineTo(centerX + size, centerY + size);
+                ctx.moveTo(centerX + size, centerY - size);
+                ctx.lineTo(centerX - size, centerY + size);
+                ctx.stroke();
+            }
+        });
+        ctx.restore();
+    }
+}
+
+/**
+ * Draw a star shape
+ * @param {number} cx - Center X
+ * @param {number} cy - Center Y
+ * @param {number} spikes - Number of spikes
+ * @param {number} outerRadius - Outer radius
+ * @param {number} innerRadius - Inner radius
+ * @param {string} color - Fill color
+ */
+function drawStar(cx, cy, spikes, outerRadius, innerRadius, color) {
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    let rot = Math.PI / 2 * 3;
+    let x = cx;
+    let y = cy;
+    const step = Math.PI / spikes;
+
+    ctx.moveTo(cx, cy - outerRadius);
+
+    for (let i = 0; i < spikes; i++) {
+        x = cx + Math.cos(rot) * outerRadius;
+        y = cy + Math.sin(rot) * outerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+
+        x = cx + Math.cos(rot) * innerRadius;
+        y = cy + Math.sin(rot) * innerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+    }
+
+    ctx.lineTo(cx, cy - outerRadius);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke(); // Add 1px black stroke
+    ctx.restore();
+}
+
+/**
+ * Draw all dots on the grid
+ * Activated dot gets pulsating animation effect
+ */
+function drawDots() {
+    const defaultColor = getComputedStyle(document.documentElement)
+        .getPropertyValue('--dot-color').trim() || '#FFFFFF';
+    const playerColor = players[currentPlayer] ? players[currentPlayer].color : '#FFFFFF';
+
+    for (let row = 0; row < GRID_SIZE; row++) {
+        for (let col = 0; col < GRID_SIZE; col++) {
+            const pos = getDotPosition(row, col);
+            const isActive = activeDot && activeDot.row === row && activeDot.col === col;
+            const isDragStart = dragStartDot && dragStartDot.row === row && dragStartDot.col === col;
+            const isSnapTarget = dragSnapDot && dragSnapDot.row === row && dragSnapDot.col === col;
+
+            // Draw dot with different styles based on state
+            if (isActive || isDragStart) {
+                // Pulsating active dot
+                const pulseScale = 1 + 0.3 * Math.sin(pulsePhase);
+                const radius = DOT_RADIUS_ACTIVE * pulseScale;
+
+                // Draw glow effect
+                ctx.save();
+                ctx.shadowColor = playerColor;
+                ctx.shadowBlur = 15;
+                ctx.fillStyle = playerColor;
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke(); // 1px black stroke
+                ctx.restore();
+            } else if (isSnapTarget) {
+                // Highlighted snap target
+                ctx.save();
+                ctx.shadowColor = playerColor;
+                ctx.shadowBlur = 10;
+                ctx.fillStyle = playerColor + 'AA'; // Semi-transparent
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, DOT_RADIUS_ACTIVE * 0.9, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke(); // 1px black stroke
+                ctx.restore();
+            } else {
+                // Normal dot
+                ctx.fillStyle = defaultColor;
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, DOT_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke(); // 1px black stroke
+            }
+        }
+    }
+}
+
+/**
+ * Draw all completed boxes
+ */
+function drawBoxes() {
+    for (const box of boxes) {
+        const topLeft = getDotPosition(box.row, box.col);
+        const bottomRight = getDotPosition(box.row + 1, box.col + 1);
+
+        const width = bottomRight.x - topLeft.x;
+        const height = bottomRight.y - topLeft.y;
+        const centerX = topLeft.x + width / 2;
+        const centerY = topLeft.y + height / 2;
+
+        // Use the player's stored color, not the local PLAYER_COLORS array
+        const player = players.find(p => p.id === box.ownerId);
+        const color = player ? player.color : '#FFFFFF';
+        ctx.fillStyle = color + '40'; // Add 40 for ~25% opacity (hex alpha)
+
+        ctx.fillRect(topLeft.x, topLeft.y, width, height);
+
+        // Completed boxes no longer show special square icons
+        // Icons only appear on uncompleted special squares
+    }
+}
+
+/**
+ * Draw all lines owned by players
+ */
+function drawLines() {
+    ctx.lineWidth = LINE_WIDTH;
+    ctx.lineCap = 'round';
+
+    for (const line of lines) {
+        // Use the player's stored color, not the local PLAYER_COLORS array
+        const player = players.find(p => p.id === line.ownerId);
+        const color = player ? player.color : '#FFFFFF';
+        ctx.strokeStyle = color;
+
+        const dot1 = getDotPosition(line.row, line.col);
+        let dot2;
+
+        if (line.direction === 'h') {
+            // Horizontal line
+            dot2 = getDotPosition(line.row, line.col + 1);
+        } else {
+            // Vertical line
+            dot2 = getDotPosition(line.row + 1, line.col);
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(dot1.x, dot1.y);
+        ctx.lineTo(dot2.x, dot2.y);
+        ctx.stroke();
+    }
+}
+
+/**
+ * Draw the drag preview line during drag-and-drop
+ */
+function drawDragPreview() {
+    if (!isDragging || !dragStartDot || !dragCurrentPos) return;
+
+    const startPos = getDotPosition(dragStartDot.row, dragStartDot.col);
+    const playerColor = players[currentPlayer] ? players[currentPlayer].color : '#FFFFFF';
+
+    // Determine end position: snap to dot if available, otherwise follow cursor
+    let endPos;
+    if (dragSnapDot) {
+        endPos = getDotPosition(dragSnapDot.row, dragSnapDot.col);
+    } else {
+        endPos = dragCurrentPos;
+    }
+
+    // Draw the preview line
+    ctx.save();
+    ctx.lineWidth = LINE_WIDTH;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = dragSnapDot ? playerColor : playerColor + '80'; // Semi-transparent if not snapped
+    ctx.setLineDash(dragSnapDot ? [] : [8, 4]); // Dashed if not snapped
+
+    ctx.beginPath();
+    ctx.moveTo(startPos.x, startPos.y);
+    ctx.lineTo(endPos.x, endPos.y);
+    ctx.stroke();
+    ctx.restore();
+}
+
+/**
+ * Get canvas dimensions
+ * @returns {{width: number, height: number}} Canvas dimensions in CSS pixels
+ */
+function getCanvasDimensions() {
+    return {
+        width: canvasWidth,
+        height: canvasHeight
+    };
+}
+
+/**
+ * Convert screen coordinates to canvas coordinates
+ * @param {number} screenX - X coordinate in screen space
+ * @param {number} screenY - Y coordinate in screen space
+ * @returns {{x: number, y: number}} Canvas coordinates
+ */
+function screenToCanvasCoords(screenX, screenY) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: screenX - rect.left,
+        y: screenY - rect.top
+    };
+}
+
+/**
+ * Get the canvas position of a dot
+ * @param {number} row - Row index (0 to GRID_SIZE-1)
+ * @param {number} col - Column index (0 to GRID_SIZE-1)
+ * @returns {{x: number, y: number}} Canvas coordinates of the dot
+ */
+function getDotPosition(row, col) {
+    return {
+        x: gridOffsetX + (col * gridSpacing),
+        y: gridOffsetY + (row * gridSpacing)
+    };
+}
+
+// ============================================================================
+// ENHANCED INPUT HANDLERS (Single-click activation + Drag-and-drop)
+// ============================================================================
+
+/**
+ * Get the nearest dot to a canvas coordinate
+ * @param {number} x - X coordinate on canvas
+ * @param {number} y - Y coordinate on canvas
+ * @param {number} tolerance - Maximum distance to consider a dot "near"
+ * @returns {{row: number, col: number}|null} Dot position or null
+ */
+function getNearestDot(x, y, tolerance = 25) {
+    let nearestDot = null;
+    let nearestDistance = tolerance;
+
+    for (let row = 0; row < GRID_SIZE; row++) {
+        for (let col = 0; col < GRID_SIZE; col++) {
+            const pos = getDotPosition(row, col);
+            const distance = Math.sqrt(Math.pow(x - pos.x, 2) + Math.pow(y - pos.y, 2));
+
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestDot = { row, col };
+            }
+        }
+    }
+
+    return nearestDot;
+}
+
+/**
+ * Check if two dots are adjacent (horizontally or vertically)
+ * @param {{row: number, col: number}} dot1
+ * @param {{row: number, col: number}} dot2
+ * @returns {boolean}
+ */
+function areDotsAdjacent(dot1, dot2) {
+    const rowDiff = Math.abs(dot1.row - dot2.row);
+    const colDiff = Math.abs(dot1.col - dot2.col);
+    // Adjacent if exactly one step horizontally OR vertically (not diagonal)
+    return (rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1);
+}
+
+/**
+ * Get line definition from two adjacent dots
+ * @param {{row: number, col: number}} dot1
+ * @param {{row: number, col: number}} dot2
+ * @returns {{row: number, col: number, direction: string}|null}
+ */
+function getLineFromDots(dot1, dot2) {
+    if (!areDotsAdjacent(dot1, dot2)) return null;
+
+    if (dot1.row === dot2.row) {
+        // Horizontal line
+        const col = Math.min(dot1.col, dot2.col);
+        return { row: dot1.row, col, direction: 'h' };
+    } else {
+        // Vertical line
+        const row = Math.min(dot1.row, dot2.row);
+        return { row, col: dot1.col, direction: 'v' };
+    }
+}
+
+/**
+ * Start the pulsating animation for active dot
+ */
+function startPulseAnimation() {
+    if (animationFrameId) return; // Already running
+
+    function animate() {
+        pulsePhase += 0.15; // Animation speed
+        redraw();
+        animationFrameId = requestAnimationFrame(animate);
+    }
+    animate();
+}
+
+/**
+ * Stop the pulsating animation
+ */
+function stopPulseAnimation() {
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+    pulsePhase = 0;
+}
+
+/**
+ * Clear all enhanced input state
+ */
+function clearInputState() {
+    activeDot = null;
+    isDragging = false;
+    dragStartDot = null;
+    dragCurrentPos = null;
+    dragSnapDot = null;
+    stopPulseAnimation();
+}
+
+/**
+ * Try to place a line between two dots and handle game logic
+ * @param {{row: number, col: number}} dot1
+ * @param {{row: number, col: number}} dot2
+ * @returns {boolean} True if line was successfully placed
+ */
+function tryPlaceLine(dot1, dot2) {
+    const line = getLineFromDots(dot1, dot2);
+    if (!line) {
+        console.log('Dots are not adjacent');
+        return false;
+    }
+
+    if (isLineOwned(line)) {
+        console.log('Line already owned');
+        return false;
+    }
+
+    // Check if we're in multiplayer mode (GameService exists and has active game)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        // Check if it's our turn first
+        if (!GameService.isMyTurn()) {
+            console.log('Not your turn!');
+            // Clear input state but don't send move
+            clearInputState();
+            redraw();
+            return false;
+        }
+
+        // Multiplayer mode - delegate to GameService
+        // Clear input state first for visual feedback
+        clearInputState();
+        redraw();
+
+        // Send move to Firebase (async, state will update via subscription)
+        GameService.handleLineDrawAttempt(line.row, line.col, line.direction)
+            .then(success => {
+                if (!success) {
+                    console.log('Move rejected by GameService');
+                }
+            })
+            .catch(err => {
+                console.error('Error sending move:', err);
+            });
+
+        return true; // Return true to indicate attempt was made
+    }
+
+    // Single-player/local mode - handle locally
+    // Place the line
+    addLine(line.row, line.col, line.direction, currentPlayer);
+
+    // Check for completed boxes
+    const result = checkAndCompleteBoxes(line, currentPlayer);
+
+    // Update scores if boxes were completed
+    if (result.count > 0) {
+        calculateScores();
+        updateScoreboard();
+    }
+
+    // Clear input state
+    clearInputState();
+
+    // Redraw board
+    redraw();
+
+    // Check if game is over
+    if (isGameOver()) {
+        showGameOver();
+        return true;
+    }
+
+    // Turn logic:
+    // - No boxes completed: check for banked turn, otherwise switch to next player
+    // - Boxes completed: player gets another turn (stays as current player)
+    // - Golden box completed: player gets TWO more turns (banked turn system)
+    let turnEnded = false; // Track if turn actually changed hands
+    if (result.count === 0) {
+        // No boxes completed - check if player has banked turns
+        if (players[currentPlayer] && players[currentPlayer].bankedTurns > 0) {
+            // Use a banked turn to stay as current player
+            players[currentPlayer].bankedTurns--;
+            console.log('Used banked turn! Player', currentPlayer, 'keeps turn. Remaining banked:', players[currentPlayer].bankedTurns);
+            updateScoreboard();
+        } else {
+            // No banked turns - switch to next player
+            currentPlayer = (currentPlayer + 1) % players.length;
+            turnEnded = true; // Turn changed hands
+            updateScoreboard();
+        }
+    } else {
+        // Boxes completed - player naturally gets another turn
+        if (result.hasGolden) {
+            // Golden box gives ADDITIONAL banked turn for use later
+            if (players[currentPlayer]) {
+                players[currentPlayer].bankedTurns = (players[currentPlayer].bankedTurns || 0) + 1;
+                console.log('Golden box! Player', currentPlayer, 'banked an extra turn. Total banked:', players[currentPlayer].bankedTurns);
+            }
+        }
+        // Player stays as current player (normal box completion behavior)
+    }
+
+    // Immediately replace completed special squares with the same type
+    if (result.hasGolden) {
+        replenishSpecialSquare('golden');
+    }
+    if (result.hasPenalty) {
+        replenishSpecialSquare('penalty');
+    }
+
+    // Increment turn counter and check for special square movement
+    if (turnEnded) {
+        turnCounter++;
+        checkAndMoveSpecialSquares();
+    }
+
+    console.log('Line placed:', line, 'Boxes:', result.count, 'Golden:', result.hasGolden, 'Player:', currentPlayer);
+    return true;
+}
+
+// Track pointer state for distinguishing click from drag
+let pointerDownTime = 0;
+let pointerDownPos = null;
+const DRAG_THRESHOLD = 10; // Minimum pixels to consider it a drag
+const CLICK_TIMEOUT = 200; // Max ms for a quick tap
+
+/**
+ * Handle pointer down (mouse or touch start)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ */
+function handlePointerDownAt(x, y) {
+    pointerDownTime = Date.now();
+    pointerDownPos = { x, y };
+
+    const dot = getNearestDot(x, y);
+
+    if (dot) {
+        // Start potential drag from this dot
+        dragStartDot = dot;
+        dragCurrentPos = { x, y };
+        // Don't set isDragging yet - wait to see if user moves
+    }
+}
+
+/**
+ * Handle pointer move (mouse move or touch move)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ */
+function handlePointerMoveAt(x, y) {
+    if (!dragStartDot) return;
+
+    const dx = x - pointerDownPos.x;
+    const dy = y - pointerDownPos.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // If moved beyond threshold, enter drag mode
+    if (distance > DRAG_THRESHOLD && !isDragging) {
+        isDragging = true;
+        activeDot = null; // Cancel click mode if we were in it
+        startPulseAnimation();
+        canvas.classList.add('dragging'); // Add dragging cursor class
+        console.log('Drag mode started');
+    }
+
+    if (isDragging) {
+        dragCurrentPos = { x, y };
+
+        // Check for snap to adjacent dot
+        const nearDot = getNearestDot(x, y, SNAP_DISTANCE);
+        if (nearDot && areDotsAdjacent(dragStartDot, nearDot)) {
+            // Check if line already exists
+            const potentialLine = getLineFromDots(dragStartDot, nearDot);
+            if (potentialLine && !isLineOwned(potentialLine)) {
+                dragSnapDot = nearDot;
+            } else {
+                dragSnapDot = null;
+            }
+        } else {
+            dragSnapDot = null;
+        }
+
+        redraw();
+    }
+}
+
+/**
+ * Handle pointer up (mouse up or touch end)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ */
+function handlePointerUpAt(x, y) {
+    const wasQuickTap = (Date.now() - pointerDownTime) < CLICK_TIMEOUT;
+    const movedDistance = pointerDownPos ?
+        Math.sqrt(Math.pow(x - pointerDownPos.x, 2) + Math.pow(y - pointerDownPos.y, 2)) : 0;
+
+    if (isDragging) {
+        // Complete drag operation
+        if (dragSnapDot && dragStartDot) {
+            tryPlaceLine(dragStartDot, dragSnapDot);
+        } else {
+            // No valid snap - cancel drag
+            clearInputState();
+            redraw();
+            console.log('Drag cancelled - no valid connection');
+        }
+    } else if (wasQuickTap && movedDistance < DRAG_THRESHOLD) {
+        // This was a tap/click, not a drag
+        const dot = getNearestDot(x, y);
+
+        if (dot) {
+            if (activeDot) {
+                // Second tap - try to complete line
+                if (areDotsAdjacent(activeDot, dot)) {
+                    tryPlaceLine(activeDot, dot);
+                } else {
+                    // Tapped non-adjacent dot - switch to this one
+                    activeDot = dot;
+                    startPulseAnimation();
+                    console.log('Activated new dot:', dot);
+                }
+            } else {
+                // First tap - activate this dot
+                activeDot = dot;
+                startPulseAnimation();
+                console.log('Activated dot:', dot);
+            }
+            redraw();
+        } else {
+            // Tapped empty space - deactivate
+            clearInputState();
+            redraw();
+        }
+    } else {
+        // It was a slow tap or moved slightly but not enough to drag
+        clearInputState();
+        redraw();
+    }
+
+    // Reset drag tracking
+    dragStartDot = null;
+    isDragging = false;
+    dragCurrentPos = null;
+    dragSnapDot = null;
+    pointerDownPos = null;
+    canvas.classList.remove('dragging'); // Remove dragging cursor class
+}
+
+/**
+ * Handle pointer cancel (mouse leave, touch cancel)
+ */
+function handlePointerCancel() {
+    clearInputState();
+    dragStartDot = null;
+    isDragging = false;
+    pointerDownPos = null;
+    canvas.classList.remove('dragging'); // Remove dragging cursor class
+    redraw();
+}
+
+// Mouse event handlers
+function handlePointerDown(e) {
+    const coords = screenToCanvasCoords(e.clientX, e.clientY);
+    handlePointerDownAt(coords.x, coords.y);
+}
+
+function handlePointerMove(e) {
+    const coords = screenToCanvasCoords(e.clientX, e.clientY);
+    handlePointerMoveAt(coords.x, coords.y);
+}
+
+function handlePointerUp(e) {
+    const coords = screenToCanvasCoords(e.clientX, e.clientY);
+    handlePointerUpAt(coords.x, coords.y);
+}
+
+// Touch event handlers
+function handleTouchStartEnhanced(e) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
+        handlePointerDownAt(coords.x, coords.y);
+    }
+}
+
+function handleTouchMoveEnhanced(e) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
+        handlePointerMoveAt(coords.x, coords.y);
+    }
+}
+
+function handleTouchEndEnhanced(e) {
+    e.preventDefault();
+    // Use changedTouches for the final position
+    if (e.changedTouches.length > 0) {
+        const touch = e.changedTouches[0];
+        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
+        handlePointerUpAt(coords.x, coords.y);
+    } else if (dragCurrentPos) {
+        // Fallback to last known position
+        handlePointerUpAt(dragCurrentPos.x, dragCurrentPos.y);
+    }
+}
+
+// Legacy handleTap function for backward compatibility
+function handleTap(x, y) {
+    const dot = getNearestDot(x, y);
+    if (dot) {
+        if (activeDot) {
+            if (areDotsAdjacent(activeDot, dot)) {
+                tryPlaceLine(activeDot, dot);
+            } else {
+                activeDot = dot;
+                startPulseAnimation();
+            }
+        } else {
+            activeDot = dot;
+            startPulseAnimation();
+        }
+        redraw();
+    }
+}
+
+/**
+ * Get the nearest line to a canvas coordinate
+ * @param {number} x - X coordinate on canvas
+ * @param {number} y - Y coordinate on canvas
+ * @returns {{row: number, col: number, direction: string}|null} Line position or null if no line nearby
+ */
+function getNearestLine(x, y) {
+    const TAP_TOLERANCE = 25; // Maximum distance from line center to register tap
+    let nearestLine = null;
+    let nearestDistance = TAP_TOLERANCE;
+
+    // Check all possible horizontal lines
+    for (let row = 0; row < GRID_SIZE; row++) {
+        for (let col = 0; col < GRID_SIZE - 1; col++) {
+            const dot1 = getDotPosition(row, col);
+            const dot2 = getDotPosition(row, col + 1);
+
+            // Calculate line center
+            const lineX = (dot1.x + dot2.x) / 2;
+            const lineY = dot1.y;
+
+            // Check if tap is near this horizontal line
+            const distance = Math.sqrt(Math.pow(x - lineX, 2) + Math.pow(y - lineY, 2));
+
+            // Also check if tap is within the line's bounds
+            const withinBounds = x >= dot1.x && x <= dot2.x && Math.abs(y - lineY) < TAP_TOLERANCE;
+
+            if (withinBounds && distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestLine = { row, col, direction: 'h' };
+            }
+        }
+    }
+
+    // Check all possible vertical lines
+    for (let row = 0; row < GRID_SIZE - 1; row++) {
+        for (let col = 0; col < GRID_SIZE; col++) {
+            const dot1 = getDotPosition(row, col);
+            const dot2 = getDotPosition(row + 1, col);
+
+            // Calculate line center
+            const lineX = dot1.x;
+            const lineY = (dot1.y + dot2.y) / 2;
+
+            // Check if tap is near this vertical line
+            const distance = Math.sqrt(Math.pow(x - lineX, 2) + Math.pow(y - lineY, 2));
+
+            // Also check if tap is within the line's bounds
+            const withinBounds = y >= dot1.y && y <= dot2.y && Math.abs(x - lineX) < TAP_TOLERANCE;
+
+            if (withinBounds && distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestLine = { row, col, direction: 'v' };
+            }
+        }
+    }
+
+    return nearestLine;
+}
+
+/**
+ * Check if a line is already owned
+ * @param {{row: number, col: number, direction: string}} line - Line to check
+ * @returns {boolean} True if line is owned
+ */
+function isLineOwned(line) {
+    // Check against Firebase state if in multiplayer mode
+    if (typeof GameService !== 'undefined' && GameService.lineExists) {
+        return GameService.lineExists(line.row, line.col, line.direction);
+    }
+
+    // Fallback to local state
+    return lines.some(l =>
+        l.row === line.row &&
+        l.col === line.col &&
+        l.direction === line.direction
+    );
+}
+
+/**
+ * Add a line to the game state
+ * @param {number} row - Row index
+ * @param {number} col - Column index
+ * @param {string} direction - 'h' for horizontal, 'v' for vertical
+ * @param {number} ownerId - Player ID who owns the line
+ */
+function addLine(row, col, direction, ownerId) {
+    lines.push({ row, col, direction, ownerId });
+}
+
+/**
+ * Check if a box is already owned
+ * @param {number} row - Box row index
+ * @param {number} col - Box column index
+ * @returns {boolean} True if box is owned
+ */
+function isBoxOwned(row, col) {
+    return boxes.some(b => b.row === row && b.col === col);
+}
+
+/**
+ * Check if a box is completed (all 4 sides have lines)
+ * @param {number} row - Box row index
+ * @param {number} col - Box column index
+ * @returns {boolean} True if all 4 sides have lines
+ */
+function isBoxCompleted(row, col) {
+    // A box is completed if all 4 lines exist:
+    // Top: horizontal at (row, col)
+    // Bottom: horizontal at (row+1, col)
+    // Left: vertical at (row, col)
+    // Right: vertical at (row, col+1)
+
+    const hasTop = isLineOwned({ row, col, direction: 'h' });
+    const hasBottom = isLineOwned({ row: row + 1, col, direction: 'h' });
+    const hasLeft = isLineOwned({ row, col, direction: 'v' });
+    const hasRight = isLineOwned({ row, col: col + 1, direction: 'v' });
+
+    return hasTop && hasBottom && hasLeft && hasRight;
+}
+
+/**
+ * Check and complete boxes affected by a new line
+ * @param {{row: number, col: number, direction: string}} line - The line that was just added
+ * @param {number} ownerId - Player ID who placed the line
+ * @returns {{count: number, hasGolden: boolean, hasPenalty: boolean}} Completion results
+ */
+function checkAndCompleteBoxes(line, ownerId) {
+    let completedCount = 0;
+    let hasGolden = false;
+    let hasPenalty = false;
+    const boxesToCheck = [];
+
+    // Determine which boxes might be affected by this line
+    if (line.direction === 'h') {
+        // Horizontal line can affect box above and below
+        if (line.row > 0) {
+            boxesToCheck.push({ row: line.row - 1, col: line.col });
+        }
+        if (line.row < GRID_SIZE - 1) {
+            boxesToCheck.push({ row: line.row, col: line.col });
+        }
+    } else {
+        // Vertical line can affect box left and right
+        if (line.col > 0) {
+            boxesToCheck.push({ row: line.row, col: line.col - 1 });
+        }
+        if (line.col < GRID_SIZE - 1) {
+            boxesToCheck.push({ row: line.row, col: line.col });
+        }
+    }
+
+    // Get special squares to check if completed boxes are special
+    let specialSquares = { golden: [], penalty: [] };
+    if (typeof GameService !== 'undefined' && GameService.getSpecialSquares) {
+        specialSquares = GameService.getSpecialSquares();
+    } else {
+        // Use local special squares for single-player mode
+        specialSquares = localSpecialSquares;
+    }
+
+    // Check each affected box
+    for (const box of boxesToCheck) {
+        if (!isBoxOwned(box.row, box.col) && isBoxCompleted(box.row, box.col)) {
+            // Check if this box is a special square
+            const boxKey = `${box.row},${box.col}`;
+            let boxType = null;
+            if (specialSquares.golden && specialSquares.golden.includes(boxKey)) {
+                boxType = 'golden';
+                hasGolden = true;
+            } else if (specialSquares.penalty && specialSquares.penalty.includes(boxKey)) {
+                boxType = 'penalty';
+                hasPenalty = true;
+            }
+
+            boxes.push({ row: box.row, col: box.col, ownerId, type: boxType });
+            completedCount++;
+            console.log('Box completed:', box, 'by player', ownerId, boxType ? `(${boxType})` : '');
+        }
+    }
+
+    return { count: completedCount, hasGolden, hasPenalty };
+}
+
+/**
+ * Calculate scores for all players based on owned boxes
+ */
+function calculateScores() {
+    // Reset scores
+    players.forEach(player => player.score = 0);
+
+    // Count boxes owned by each player
+    boxes.forEach(box => {
+        const player = players.find(p => p.id === box.ownerId);
+        if (player) {
+            player.score++;
+        }
+    });
+}
+
+/**
+ * Update the scoreboard UI
+ */
+function updateScoreboard() {
+    const scoreboardEl = document.getElementById('scoreboard');
+    if (!scoreboardEl) return;
+
+    // Set CSS variables for active player color (50% brighter)
+    if (players[currentPlayer]) {
+        const activeColor = players[currentPlayer].color;
+        const brighterColor = brightenColor(activeColor, 50); // 50% brighter
+        const r = parseInt(brighterColor.slice(1, 3), 16);
+        const g = parseInt(brighterColor.slice(3, 5), 16);
+        const b = parseInt(brighterColor.slice(5, 7), 16);
+
+        document.documentElement.style.setProperty('--active-player-color', brighterColor);
+        document.documentElement.style.setProperty('--active-player-glow-start', `rgba(${r}, ${g}, ${b}, 0.5)`);
+        document.documentElement.style.setProperty('--active-player-glow-end', `rgba(${r}, ${g}, ${b}, 0.8)`);
+    }
+
+    // Clear existing content
+    scoreboardEl.innerHTML = '';
+
+    // Create score items for each player
+    players.forEach((player, index) => {
+        const scoreItem = document.createElement('div');
+        scoreItem.className = 'score-item';
+
+        // Highlight current player
+        if (index === currentPlayer) {
+            scoreItem.classList.add('active');
+        }
+
+        // Player name with color indicator
+        const nameEl = document.createElement('div');
+        nameEl.className = 'score-name';
+        nameEl.innerHTML = `<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${player.color};margin-right:6px;border:1px solid #FFFFFF;box-sizing:border-box;"></span>${player.name}`;
+
+        // Score value
+        const scoreEl = document.createElement('div');
+        scoreEl.className = 'score-value';
+        scoreEl.textContent = player.score;
+
+        scoreItem.appendChild(nameEl);
+        scoreItem.appendChild(scoreEl);
+        scoreboardEl.appendChild(scoreItem);
+    });
+
+    // Update game status message
+    updateGameStatus();
+}
+
+/**
+ * Update the game status message
+ */
+function updateGameStatus() {
+    const statusEl = document.getElementById('game-status');
+    if (!statusEl) return;
+
+    const currentPlayerObj = players[currentPlayer];
+    if (currentPlayerObj) {
+        statusEl.innerHTML = `<strong style="color:${currentPlayerObj.color}">${currentPlayerObj.name}'s Turn</strong>`;
+    }
+}
+
+/**
+ * Check if the game is over (all boxes filled)
+ * @returns {boolean} True if game is over
+ */
+function isGameOver() {
+    const totalBoxes = (GRID_SIZE - 1) * (GRID_SIZE - 1); // 5x5 = 25 boxes
+    return boxes.length >= totalBoxes;
+}
+
+/**
+ * Determine the winner(s) based on scores
+ * @returns {{winners: Array, isTie: boolean}} Winner information
+ */
+function determineWinner() {
+    const maxScore = Math.max(...players.map(p => p.score));
+    const winners = players.filter(p => p.score === maxScore);
+    return {
+        winners,
+        isTie: winners.length > 1
+    };
+}
+
+/**
+ * Show the game over screen with winner information
+ */
+function showGameOver() {
+    const result = determineWinner();
+
+    // Update winner display
+    const winnerDisplayEl = document.getElementById('winner-display');
+    if (winnerDisplayEl) {
+        if (result.isTie) {
+            const winnerNames = result.winners.map(w => w.name).join(' and ');
+            winnerDisplayEl.innerHTML = `<span style="color:${result.winners[0].color}">It's a Tie!</span><br>${winnerNames}`;
+        } else {
+            const winner = result.winners[0];
+            winnerDisplayEl.innerHTML = `<span style="color:${winner.color}">${winner.name} Wins!</span>`;
+        }
+    }
+
+    // Update final scores
+    const finalScoresEl = document.getElementById('final-scores');
+    if (finalScoresEl) {
+        finalScoresEl.innerHTML = '';
+
+        // Sort players by score (highest first)
+        const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
+
+        sortedPlayers.forEach(player => {
+            const scoreItem = document.createElement('div');
+            scoreItem.className = 'final-score-item';
+            scoreItem.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${player.color};border:1px solid #FFFFFF;box-sizing:border-box;"></span>
+                    <strong>${player.name}</strong>
+                </div>
+                <div style="font-size:1.5rem;font-weight:700;">${player.score}</div>
+            `;
+            finalScoresEl.appendChild(scoreItem);
+        });
+    }
+
+    // Show game over screen
+    if (typeof showScreen === 'function') {
+        showScreen('gameover');
+    }
+
+    console.log('Game Over!', result);
+}
+
+// ============================================================================
+// MULTIPLAYER SYNC FUNCTIONS (Called by game.js)
+// ============================================================================
+
+/**
+ * Update board state from Firebase game state
+ * Called when game state updates come from Firebase
+ * @param {object} gameState - The game state from Firebase
+ */
+function updateBoardFromGameState(gameState) {
+    if (!gameState) return;
+
+    // Update lines array from game state
+    lines.length = 0;
+    if (gameState.linesArray) {
+        gameState.linesArray.forEach(line => {
+            lines.push({
+                row: line.row,
+                col: line.col,
+                direction: line.direction,
+                ownerId: line.ownerId
+            });
+        });
+    }
+
+    // Update boxes array from game state
+    boxes.length = 0;
+    if (gameState.boxesArray) {
+        gameState.boxesArray.forEach(box => {
+            boxes.push({
+                row: box.row,
+                col: box.col,
+                ownerId: box.ownerId,
+                type: box.type
+            });
+        });
+    }
+
+    // Update current player
+    if (gameState.currentPlayerIndex !== undefined) {
+        currentPlayer = gameState.currentPlayerIndex;
+    }
+
+    // Update players array
+    if (gameState.playersArray) {
+        players.length = 0;
+        gameState.playersArray.forEach((player, index) => {
+            players.push({
+                id: index,
+                name: player.name,
+                color: player.color,
+                score: player.score || 0,
+                bankedTurns: player.bankedTurns || 0
+            });
+        });
+    }
+
+    // Update canvas container styling based on current player
+    if (players[currentPlayer]) {
+        const currentPlayerData = players[currentPlayer];
+        // Check if it's the local player's turn (pulse only shows for local player)
+        const isLocalPlayer = typeof GameService !== 'undefined' && GameService.isMyTurn && GameService.isMyTurn();
+        updateCanvasContainerStyle(currentPlayerData.color, currentPlayerData.bankedTurns || 0, isLocalPlayer);
+    }
+
+    // Redraw the board with updated state
+    redraw();
+
+    console.log('Board updated from game state:', {
+        lines: lines.length,
+        boxes: boxes.length,
+        currentPlayer,
+        players: players.length
+    });
+}
+
+/**
+ * Update scoreboard from Firebase game state
+ * Called when game state updates come from Firebase
+ * @param {object} gameState - The game state from Firebase
+ */
+function updateScoreboardFromState(gameState) {
+    if (!gameState || !gameState.playersArray) return;
+
+    // Update local players array scores
+    gameState.playersArray.forEach((player, index) => {
+        if (players[index]) {
+            players[index].score = player.score || 0;
+            players[index].name = player.name;
+            players[index].bankedTurns = player.bankedTurns || 0;
+        }
+    });
+
+    // Update current player index
+    if (gameState.currentPlayerIndex !== undefined) {
+        currentPlayer = gameState.currentPlayerIndex;
+    }
+
+    // Refresh the scoreboard UI
+    updateScoreboard();
+}
+
+/**
+ * Show game over screen with state from Firebase
+ * Called when game transitions to 'finished' status
+ * @param {object} gameState - The game state from Firebase
+ */
+function showGameOverFromState(gameState) {
+    if (!gameState || !gameState.playersArray) {
+        showGameOver(); // Fallback to local state
+        return;
+    }
+
+    // Update local players with final scores from Firebase
+    players.length = 0;
+    gameState.playersArray.forEach((player, index) => {
+        players.push({
+            id: index,
+            name: player.name,
+            color: player.color,
+            score: player.score || 0
+        });
+    });
+
+    // Use the standard game over display
+    showGameOver();
+}
+
+/**
+ * Reset the board to initial state
+ * Called when starting a new game or returning to menu
+ */
+function resetBoardState() {
+    // Clear lines and boxes
+    lines.length = 0;
+    boxes.length = 0;
+
+    // Reset current player
+    currentPlayer = 0;
+
+    // Clear input state
+    clearInputState();
+
+    // Reset players to default 2-player setup with unique colors
+    players.length = 0;
+    const newPlayers = getUniquePlayers();
+    players.push(...newPlayers);
+
+    // Redraw empty board
+    redraw();
+
+    // Update UI
+    updateScoreboard();
+
+    // Reset turn counter and special squares
+    turnCounter = 0;
+    nextMoveTurn = getRandomMoveTurn();
+    initializeSpecialSquares();
+
+    console.log('Board state reset');
+}
+
+// ============================================================================
+// SPECIAL SQUARE DYNAMIC MOVEMENT (Local Mode)
+// ============================================================================
+
+/**
+ * Get random turn count for next movement (3-5 turns)
+ * @returns {number} Random number between 3 and 5
+ */
+function getRandomMoveTurn() {
+    return Math.floor(Math.random() * 3) + 3; // 3, 4, or 5
+}
+
+/**
+ * Validate and fix special square counts
+ * Ensures exactly 1 golden and 2 penalties
+ */
+function validateSpecialSquares() {
+    // Remove completed squares
+    localSpecialSquares.golden = localSpecialSquares.golden.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+    localSpecialSquares.penalty = localSpecialSquares.penalty.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+    const currentSpecial = [...localSpecialSquares.golden, ...localSpecialSquares.penalty];
+    const availablePositions = uncompletedPositions.filter(pos => !currentSpecial.includes(pos));
+
+    if (availablePositions.length === 0) return;
+
+    const shuffled = [...availablePositions].sort(() => Math.random() - 0.5);
+    let nextIndex = 0;
+
+    // Ensure exactly 1 golden
+    while (localSpecialSquares.golden.length < 1 && nextIndex < shuffled.length) {
+        localSpecialSquares.golden.push(shuffled[nextIndex++]);
+    }
+    while (localSpecialSquares.golden.length > 1) {
+        localSpecialSquares.golden.pop();
+    }
+
+    // Ensure exactly 2 penalties
+    while (localSpecialSquares.penalty.length < 2 && nextIndex < shuffled.length) {
+        localSpecialSquares.penalty.push(shuffled[nextIndex++]);
+    }
+    while (localSpecialSquares.penalty.length > 2) {
+        localSpecialSquares.penalty.pop();
+    }
+
+    console.log('Special squares validated:', localSpecialSquares);
+}
+
+/**
+ * Initialize special squares at random positions
+ * Places 1 golden and 2 penalty squares
+ */
+function initializeSpecialSquares() {
+    // Skip if in multiplayer mode (GameService handles it)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    localSpecialSquares.golden = [];
+    localSpecialSquares.penalty = [];
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+    if (uncompletedPositions.length < 3) {
+        console.log('Not enough positions for special squares');
+        return;
+    }
+
+    // Shuffle positions
+    const shuffled = [...uncompletedPositions].sort(() => Math.random() - 0.5);
+
+    // Place EXACTLY 1 golden and 2 penalty squares
+    localSpecialSquares.golden = [shuffled[0]];
+    localSpecialSquares.penalty = [shuffled[1], shuffled[2]];
+
+    console.log('Special squares initialized:', localSpecialSquares);
+    validateSpecialSquares(); // Validate immediately
+}
+
+/**
+ * Get all uncompleted box positions
+ * @returns {string[]} Array of "row,col" keys for uncompleted boxes
+ */
+function getUncompletedBoxPositions() {
+    const positions = [];
+    for (let row = 0; row < GRID_SIZE - 1; row++) {
+        for (let col = 0; col < GRID_SIZE - 1; col++) {
+            const key = `${row},${col}`;
+            if (!boxes.some(b => `${b.row},${b.col}` === key)) {
+                positions.push(key);
+            }
+        }
+    }
+    return positions;
+}
+
+/**
+ * Replenish a specific type of special square immediately when completed
+ * @param {string} type - 'golden' or 'penalty'
+ */
+function replenishSpecialSquare(type) {
+    // Skip if in multiplayer mode (GameService handles it)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    // Remove completed special squares of this type
+    localSpecialSquares[type] = localSpecialSquares[type].filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+    const currentSpecial = [...localSpecialSquares.golden, ...localSpecialSquares.penalty];
+    const availablePositions = uncompletedPositions.filter(pos => !currentSpecial.includes(pos));
+
+    if (availablePositions.length === 0) {
+        console.log(`No available positions to place new ${type} square`);
+        return;
+    }
+
+    // Pick a random available position
+    const shuffled = [...availablePositions].sort(() => Math.random() - 0.5);
+    const newPosition = shuffled[0];
+
+    // Add the new special square of the same type
+    localSpecialSquares[type].push(newPosition);
+
+    console.log(`${type} square completed! New ${type} square placed at ${newPosition}`);
+    console.log('Current special squares:', localSpecialSquares);
+    redraw();
+}
+
+/**
+ * Move special squares to new random positions
+ * Called every 3-5 turns
+ */
+function moveSpecialSquares() {
+    // Skip if in multiplayer mode (GameService handles it)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+
+    // Remove current special square positions that are already completed
+    localSpecialSquares.golden = localSpecialSquares.golden.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+    localSpecialSquares.penalty = localSpecialSquares.penalty.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+
+    // Get positions available for new squares (excluding current special squares)
+    const currentSpecial = [...localSpecialSquares.golden, ...localSpecialSquares.penalty];
+    const availablePositions = uncompletedPositions.filter(pos => !currentSpecial.includes(pos));
+
+    if (availablePositions.length === 0) {
+        console.log('No available positions to move special squares');
+        return;
+    }
+
+    // Shuffle available positions
+    const shuffled = [...availablePositions].sort(() => Math.random() - 0.5);
+
+    // Maintain 2 penalty + 1 golden
+    localSpecialSquares.golden = [shuffled[0] || localSpecialSquares.golden[0]];
+    localSpecialSquares.penalty = [
+        shuffled[1] || localSpecialSquares.penalty[0],
+        shuffled[2] || localSpecialSquares.penalty[1]
+    ].filter(Boolean);
+
+    console.log('Special squares moved to new positions:', localSpecialSquares);
+
+    // Redraw to show new positions
+    redraw();
+}
+
+/**
+ * Check if it's time to move special squares and do so
+ * Called after each turn
+ */
+function checkAndMoveSpecialSquares() {
+    // Skip if in multiplayer mode
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    if (turnCounter >= nextMoveTurn) {
+        moveSpecialSquares();
+        turnCounter = 0;
+        nextMoveTurn = getRandomMoveTurn();
+        console.log(`Special squares moved! Next movement in ${nextMoveTurn} turns`);
+    }
+}
