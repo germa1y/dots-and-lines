@@ -276,6 +276,82 @@ function findCompletedBoxes(row, col, direction) {
 }
 
 /**
+ * Respawn special squares in unoccupied boxes
+ * @param {string[]} goldenToRespawn - Golden square keys that were completed
+ * @param {string[]} penaltyToRespawn - Penalty square keys that were completed
+ * @param {string[]} justCompleted - Box keys just completed this turn
+ * @returns {object|null} New specialSquares object or null if no respawn needed
+ */
+function respawnSpecialSquares(goldenToRespawn, penaltyToRespawn, justCompleted) {
+  if (!gameState || !gameState.specialSquares) return null;
+
+  const gridSize = gameState.gridSize || 6;
+  const boxCount = gridSize - 1;
+
+  // Get all currently occupied boxes (owned + just completed + current special squares)
+  const occupiedBoxes = new Set();
+
+  // Add already owned boxes
+  if (gameState.boxes) {
+    Object.keys(gameState.boxes).forEach(key => occupiedBoxes.add(key));
+  }
+
+  // Add just completed boxes
+  justCompleted.forEach(key => occupiedBoxes.add(key));
+
+  // Copy current special squares
+  let newGolden = [...(gameState.specialSquares.golden || [])];
+  let newPenalty = [...(gameState.specialSquares.penalty || [])];
+
+  // Remove completed special squares from their lists
+  goldenToRespawn.forEach(key => {
+    newGolden = newGolden.filter(k => k !== key);
+  });
+  penaltyToRespawn.forEach(key => {
+    newPenalty = newPenalty.filter(k => k !== key);
+  });
+
+  // Find all unoccupied boxes (not owned, not special)
+  const allSpecial = new Set([...newGolden, ...newPenalty]);
+  const unoccupiedBoxes = [];
+
+  for (let row = 0; row < boxCount; row++) {
+    for (let col = 0; col < boxCount; col++) {
+      const key = `${row},${col}`;
+      if (!occupiedBoxes.has(key) && !allSpecial.has(key)) {
+        unoccupiedBoxes.push(key);
+      }
+    }
+  }
+
+  // Shuffle unoccupied boxes
+  for (let i = unoccupiedBoxes.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [unoccupiedBoxes[i], unoccupiedBoxes[j]] = [unoccupiedBoxes[j], unoccupiedBoxes[i]];
+  }
+
+  // Respawn golden squares
+  let spawnIndex = 0;
+  for (let i = 0; i < goldenToRespawn.length && spawnIndex < unoccupiedBoxes.length; i++) {
+    newGolden.push(unoccupiedBoxes[spawnIndex]);
+    console.log('Golden square respawned at:', unoccupiedBoxes[spawnIndex]);
+    spawnIndex++;
+  }
+
+  // Respawn penalty squares
+  for (let i = 0; i < penaltyToRespawn.length && spawnIndex < unoccupiedBoxes.length; i++) {
+    newPenalty.push(unoccupiedBoxes[spawnIndex]);
+    console.log('Penalty square respawned at:', unoccupiedBoxes[spawnIndex]);
+    spawnIndex++;
+  }
+
+  return {
+    golden: newGolden,
+    penalty: newPenalty
+  };
+}
+
+/**
  * Handle a line draw attempt by the local player
  * Called from board.js when player clicks/taps a line
  * @param {number} row
@@ -314,6 +390,10 @@ async function handleLineDrawAttempt(row, col, direction) {
   let forfeitTurn = false;
   let pointsEarned = 0;
 
+  // Track special squares that need to respawn
+  const goldenToRespawn = [];
+  const penaltyToRespawn = [];
+
   for (const box of completedBoxes) {
     const boxKey = getBoxKey(box.row, box.col);
     updates[`boxes/${boxKey}`] = {
@@ -329,11 +409,26 @@ async function handleLineDrawAttempt(row, col, direction) {
       const currentBanked = gameState.playersArray[localPlayerIndex]?.bankedTurns || 0;
       updates[`players/${localPlayerIndex}/bankedTurns`] = currentBanked + 1;
       earnedTurn = true; // Also keep your turn
+      goldenToRespawn.push(boxKey);
       console.log('Golden square! Banked a turn.');
     } else if (box.type === 'penalty') {
       // Penalty: Forfeit turn even if you completed a box
       forfeitTurn = true;
+      penaltyToRespawn.push(boxKey);
       console.log('Penalty square! Turn forfeited.');
+    }
+  }
+
+  // Respawn special squares in unoccupied boxes
+  if (goldenToRespawn.length > 0 || penaltyToRespawn.length > 0) {
+    const respawnedSquares = respawnSpecialSquares(
+      goldenToRespawn,
+      penaltyToRespawn,
+      completedBoxes.map(b => getBoxKey(b.row, b.col))
+    );
+
+    if (respawnedSquares) {
+      updates['specialSquares'] = respawnedSquares;
     }
   }
 
@@ -348,10 +443,29 @@ async function handleLineDrawAttempt(row, col, direction) {
     // Completed a box (non-penalty) - keep turn
     // currentPlayerIndex stays the same
     console.log('Box completed! Extra turn.');
-  } else {
-    // No box completed OR penalty - advance turn
+  } else if (forfeitTurn) {
+    // Penalty box - forfeit turn immediately, no banked turn usage
     const nextPlayer = (gameState.currentPlayerIndex + 1) % gameState.playerCount;
     updates.currentPlayerIndex = nextPlayer;
+    console.log('Penalty! Turn forfeited to player', nextPlayer);
+  } else {
+    // No box completed - check for banked turns
+    // Get current banked turns (accounting for any just-banked turns in this move)
+    const currentBanked = updates[`players/${localPlayerIndex}/bankedTurns`]
+      ?? gameState.playersArray[localPlayerIndex]?.bankedTurns
+      ?? 0;
+
+    if (currentBanked > 0) {
+      // Use a banked turn - decrement and keep playing
+      // Visual feedback provided by pulsating canvas container
+      updates[`players/${localPlayerIndex}/bankedTurns`] = currentBanked - 1;
+      console.log('Using banked turn! Remaining:', currentBanked - 1);
+    } else {
+      // No banked turns - advance to next player
+      const nextPlayer = (gameState.currentPlayerIndex + 1) % gameState.playerCount;
+      updates.currentPlayerIndex = nextPlayer;
+      console.log('Turn passed to player', nextPlayer);
+    }
   }
 
   // Check if game is over

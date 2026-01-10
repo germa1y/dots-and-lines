@@ -28,6 +28,376 @@ let gridSpacing; // Distance between dots
 let gridOffsetX; // X offset to center the grid
 let gridOffsetY; // Y offset to center the grid
 
+// Canvas container pulsing animation state
+let pulseAnimationId = null;
+let containerPulsePhase = 0;
+
+// Pulsation parameters (adjustable via debug panel)
+let pulseParams = {
+    speed: 0.002,      // How fast the pulse moves (0.0001 - 0.05)
+    frequency: 4,       // Number of rings (1 - 5)
+    thickness: 1,       // Width of the bright ring in % (0 - 100)
+    innerFadeWidth: 14, // Inner fade/gradient width in % (0 - 100)
+    outerFadeWidth: 14, // Outer fade/gradient width in % (0 - 100)
+    opacity: 0.2,       // Overall opacity of the effect (0.05 - 1.0)
+    ringBrightness: [15, 35, 25, 45] // Brightness for each ring (0=white, 50=player color, 100=black)
+};
+
+// Set to true to show the pulse settings debug panel
+const SHOW_PULSE_DEBUG_PANEL = false;
+
+/**
+ * Create or update the pulse debug control panel
+ * @param {boolean} show - Whether to show or hide the panel
+ * @param {string} baseColor - The base color for preview
+ */
+function updatePulseDebugPanel(show, baseColor) {
+    // Check if debug panel is enabled
+    if (!SHOW_PULSE_DEBUG_PANEL) {
+        let panel = document.getElementById('pulse-debug-panel');
+        if (panel) panel.style.display = 'none';
+        return;
+    }
+
+    let panel = document.getElementById('pulse-debug-panel');
+
+    if (!show) {
+        if (panel) panel.style.display = 'none';
+        return;
+    }
+
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'pulse-debug-panel';
+        panel.innerHTML = `
+            <div style="font-weight:bold;margin-bottom:10px;border-bottom:1px solid #555;padding-bottom:5px;">Pulse Settings</div>
+
+            <label>Speed: <span id="pulse-speed-val">${pulseParams.speed}</span></label>
+            <input type="range" id="pulse-speed" min="0.0001" max="0.05" step="0.0001" value="${pulseParams.speed}">
+
+            <label>Frequency (rings): <span id="pulse-frequency-val">${pulseParams.frequency}</span></label>
+            <input type="range" id="pulse-frequency" min="1" max="4" step="1" value="${pulseParams.frequency}">
+
+            <label>Ring Thickness: <span id="pulse-thickness-val">${pulseParams.thickness}%</span></label>
+            <input type="range" id="pulse-thickness" min="0" max="100" step="1" value="${pulseParams.thickness}">
+
+            <label>Inner Fade Width: <span id="pulse-inner-fade-val">${pulseParams.innerFadeWidth}%</span></label>
+            <input type="range" id="pulse-inner-fade" min="0" max="100" step="1" value="${pulseParams.innerFadeWidth}">
+
+            <label>Outer Fade Width: <span id="pulse-outer-fade-val">${pulseParams.outerFadeWidth}%</span></label>
+            <input type="range" id="pulse-outer-fade" min="0" max="100" step="1" value="${pulseParams.outerFadeWidth}">
+
+            <label>Opacity: <span id="pulse-opacity-val">${pulseParams.opacity}</span></label>
+            <input type="range" id="pulse-opacity" min="0.05" max="1.0" step="0.05" value="${pulseParams.opacity}">
+
+            <div id="ring-colors-container" style="margin-top:10px;border-top:1px solid #555;padding-top:10px;">
+                <div style="font-weight:bold;margin-bottom:8px;">Ring Brightness</div>
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:4px;">
+                    <span>White</span>
+                    <span>Player</span>
+                    <span>Black</span>
+                </div>
+                ${[1,2,3,4].map(i => `
+                    <div class="ring-color-row" data-ring="${i}" style="display:${i <= pulseParams.frequency ? 'flex' : 'none'};align-items:center;gap:8px;margin-bottom:6px;">
+                        <label style="margin:0;min-width:50px;">Ring ${i}:</label>
+                        <input type="range" id="ring-brightness-${i}" min="0" max="100" step="1" value="${pulseParams.ringBrightness[i-1]}" style="flex:1;">
+                        <span id="ring-brightness-val-${i}" style="min-width:30px;text-align:right;">${pulseParams.ringBrightness[i-1]}%</span>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div style="margin-top:10px;font-size:11px;color:#888;">
+                Adjust sliders to modify pulse effect
+            </div>
+        `;
+        panel.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.85);
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 9999;
+            min-width: 200px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        `;
+
+        // Style for labels and inputs
+        const style = document.createElement('style');
+        style.textContent = `
+            #pulse-debug-panel label {
+                display: block;
+                margin: 8px 0 4px 0;
+                color: #ccc;
+            }
+            #pulse-debug-panel input[type="range"] {
+                width: 100%;
+                cursor: pointer;
+            }
+            #pulse-debug-panel span {
+                color: #4ecdc4;
+                float: right;
+            }
+        `;
+        document.head.appendChild(style);
+        document.body.appendChild(panel);
+
+        // Add event listeners
+        document.getElementById('pulse-speed').addEventListener('input', (e) => {
+            pulseParams.speed = parseFloat(e.target.value);
+            document.getElementById('pulse-speed-val').textContent = pulseParams.speed;
+        });
+        document.getElementById('pulse-frequency').addEventListener('input', (e) => {
+            pulseParams.frequency = parseInt(e.target.value);
+            document.getElementById('pulse-frequency-val').textContent = pulseParams.frequency;
+            // Show/hide ring color rows based on frequency
+            for (let i = 1; i <= 4; i++) {
+                const row = document.querySelector(`.ring-color-row[data-ring="${i}"]`);
+                if (row) {
+                    row.style.display = i <= pulseParams.frequency ? 'flex' : 'none';
+                }
+            }
+        });
+        document.getElementById('pulse-thickness').addEventListener('input', (e) => {
+            pulseParams.thickness = parseInt(e.target.value);
+            document.getElementById('pulse-thickness-val').textContent = pulseParams.thickness + '%';
+        });
+        document.getElementById('pulse-inner-fade').addEventListener('input', (e) => {
+            pulseParams.innerFadeWidth = parseInt(e.target.value);
+            document.getElementById('pulse-inner-fade-val').textContent = pulseParams.innerFadeWidth + '%';
+        });
+        document.getElementById('pulse-outer-fade').addEventListener('input', (e) => {
+            pulseParams.outerFadeWidth = parseInt(e.target.value);
+            document.getElementById('pulse-outer-fade-val').textContent = pulseParams.outerFadeWidth + '%';
+        });
+        document.getElementById('pulse-opacity').addEventListener('input', (e) => {
+            pulseParams.opacity = parseFloat(e.target.value);
+            document.getElementById('pulse-opacity-val').textContent = pulseParams.opacity;
+        });
+
+        // Ring brightness sliders
+        for (let i = 1; i <= 4; i++) {
+            document.getElementById(`ring-brightness-${i}`).addEventListener('input', (e) => {
+                pulseParams.ringBrightness[i - 1] = parseInt(e.target.value);
+                document.getElementById(`ring-brightness-val-${i}`).textContent = pulseParams.ringBrightness[i - 1] + '%';
+            });
+        }
+    }
+
+    panel.style.display = 'block';
+}
+
+/**
+ * Parse a hex color to RGB components
+ * @param {string} hex - Hex color string (#RRGGBB or #RGB)
+ * @returns {{r: number, g: number, b: number}}
+ */
+function hexToRgb(hex) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (result) {
+        return {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        };
+    }
+    // Handle shorthand #RGB
+    const short = /^#?([a-f\d])([a-f\d])([a-f\d])$/i.exec(hex);
+    if (short) {
+        return {
+            r: parseInt(short[1] + short[1], 16),
+            g: parseInt(short[2] + short[2], 16),
+            b: parseInt(short[3] + short[3], 16)
+        };
+    }
+    return { r: 128, g: 128, b: 128 }; // Default gray
+}
+
+/**
+ * Convert RGB to hex color
+ * @param {number} r - Red (0-255)
+ * @param {number} g - Green (0-255)
+ * @param {number} b - Blue (0-255)
+ * @returns {string} Hex color string
+ */
+function rgbToHex(r, g, b) {
+    return '#' + [r, g, b].map(x => {
+        const hex = Math.round(Math.max(0, Math.min(255, x))).toString(16);
+        return hex.length === 1 ? '0' + hex : hex;
+    }).join('');
+}
+
+/**
+ * Darken a color by a percentage
+ * @param {string} hex - Hex color string
+ * @param {number} percent - Percentage to darken (0-100)
+ * @returns {string} Darkened hex color
+ */
+function darkenColor(hex, percent) {
+    const rgb = hexToRgb(hex);
+    const factor = 1 - (percent / 100);
+    return rgbToHex(rgb.r * factor, rgb.g * factor, rgb.b * factor);
+}
+
+/**
+ * Brighten a color by a percentage
+ * @param {string} hex - Hex color string
+ * @param {number} percent - Percentage to brighten (0-100)
+ * @returns {string} Brightened hex color
+ */
+function brightenColor(hex, percent) {
+    const rgb = hexToRgb(hex);
+    const factor = percent / 100;
+    return rgbToHex(
+        rgb.r + (255 - rgb.r) * factor,
+        rgb.g + (255 - rgb.g) * factor,
+        rgb.b + (255 - rgb.b) * factor
+    );
+}
+
+/**
+ * Convert hex color to RGBA string with opacity
+ * @param {string} hex - Hex color string
+ * @param {number} opacity - Opacity value (0-1)
+ * @returns {string} RGBA color string
+ */
+function hexToRgba(hex, opacity) {
+    const rgb = hexToRgb(hex);
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`;
+}
+
+/**
+ * Calculate ring color based on brightness slider value
+ * 0 = white, 50 = player color, 100 = black
+ * @param {string} playerColor - The player's base color (hex)
+ * @param {number} brightness - Brightness value (0-100)
+ * @returns {string} Calculated hex color
+ */
+function getRingColorFromBrightness(playerColor, brightness) {
+    const playerRgb = hexToRgb(playerColor);
+
+    if (brightness <= 50) {
+        // Interpolate from white (0) to player color (50)
+        const factor = brightness / 50; // 0 to 1
+        return rgbToHex(
+            255 - (255 - playerRgb.r) * factor,
+            255 - (255 - playerRgb.g) * factor,
+            255 - (255 - playerRgb.b) * factor
+        );
+    } else {
+        // Interpolate from player color (50) to black (100)
+        const factor = (brightness - 50) / 50; // 0 to 1
+        return rgbToHex(
+            playerRgb.r * (1 - factor),
+            playerRgb.g * (1 - factor),
+            playerRgb.b * (1 - factor)
+        );
+    }
+}
+
+/**
+ * Update the canvas container background based on current player
+ * @param {string} playerColor - The current player's color
+ * @param {number} bankedTurns - Number of banked turns for current player
+ * @param {boolean} isLocalPlayer - Whether the current player is the local player
+ */
+function updateCanvasContainerStyle(playerColor, bankedTurns, isLocalPlayer) {
+    const container = document.querySelector('.canvas-container');
+    if (!container) return;
+
+    // Base color: 75% darker than player color
+    const baseColor = darkenColor(playerColor, 75);
+
+    // Stop any existing animation
+    if (pulseAnimationId) {
+        cancelAnimationFrame(pulseAnimationId);
+        pulseAnimationId = null;
+    }
+
+    // Only show pulse effect if it's the local player's turn AND they have banked turns
+    if (bankedTurns > 0 && isLocalPlayer) {
+        // Show debug panel when pulsation is active
+        updatePulseDebugPanel(true, baseColor);
+
+        // Radial pulsation - outward only, multiple rings starting from center
+        function animatePulse() {
+            // Update phase with speed
+            containerPulsePhase += pulseParams.speed;
+
+            // Get opacity for RGBA colors (only affects background, not game elements)
+            const opacity = pulseParams.opacity;
+
+            // Build gradient with multiple rings based on frequency
+            const gradientStops = [];
+            const cycleLength = 100 / pulseParams.frequency; // Space between rings
+
+            // Convert base color to RGBA with opacity
+            const baseColorRgba = hexToRgba(baseColor, opacity);
+
+            for (let i = 0; i < pulseParams.frequency; i++) {
+                // Get ring color from brightness slider (0=white, 50=player color, 100=black)
+                const ringColorHex = getRingColorFromBrightness(playerColor, pulseParams.ringBrightness[i]);
+                const ringColorRgba = hexToRgba(ringColorHex, opacity);
+
+                // Each ring is offset by its index
+                const ringOffset = (i / pulseParams.frequency);
+                const pulseAmount = ((containerPulsePhase + ringOffset) % 1); // 0 to 1, repeating
+
+                // Ring expands from 0% (center) to 100%+ (past edge)
+                const ringCenter = pulseAmount * 120; // 0% to 120%
+
+                // Calculate ring positions - starts from absolute center
+                // Inner fade goes from base color to ring color
+                const innerFadeStart = Math.max(0, ringCenter - pulseParams.thickness / 2 - pulseParams.innerFadeWidth);
+                const ringStart = Math.max(0, ringCenter - pulseParams.thickness / 2);
+                const ringEnd = ringCenter + pulseParams.thickness / 2;
+                // Outer fade goes from ring color back to base color
+                const outerFadeEnd = ringCenter + pulseParams.thickness / 2 + pulseParams.outerFadeWidth;
+
+                // Add gradient stops for this ring (inner fade -> ring -> outer fade)
+                if (innerFadeStart >= 0 && innerFadeStart <= 100) {
+                    gradientStops.push({ pos: innerFadeStart, color: baseColorRgba });
+                }
+                if (ringStart >= 0 && ringStart <= 100) {
+                    gradientStops.push({ pos: ringStart, color: ringColorRgba });
+                }
+                if (ringEnd >= 0 && ringEnd <= 100) {
+                    gradientStops.push({ pos: ringEnd, color: ringColorRgba });
+                }
+                if (outerFadeEnd >= 0 && outerFadeEnd <= 100) {
+                    gradientStops.push({ pos: outerFadeEnd, color: baseColorRgba });
+                }
+            }
+
+            // Sort stops by position
+            gradientStops.sort((a, b) => a.pos - b.pos);
+
+            // Build gradient string with RGBA colors (opacity baked in)
+            let gradientStr = `radial-gradient(circle at center, ${baseColorRgba} 0%`;
+            gradientStops.forEach(stop => {
+                gradientStr += `, ${stop.color} ${stop.pos}%`;
+            });
+            gradientStr += `, ${baseColorRgba} 100%)`;
+
+            container.style.background = gradientStr;
+            container.style.opacity = 1; // Keep container fully opaque
+
+            pulseAnimationId = requestAnimationFrame(animatePulse);
+        }
+        animatePulse();
+    } else {
+        // Hide debug panel when no banked turns
+        updatePulseDebugPanel(false);
+
+        // Static color when no banked turns
+        container.style.background = baseColor;
+        container.style.opacity = 1.0;
+    }
+}
+
 // Game state (will be synced with backend later)
 let lines = []; // Array of line objects: { row, col, direction, ownerId }
 let boxes = []; // Array of box objects: { row, col, ownerId }
@@ -53,10 +423,23 @@ let animationFrameId = null; // For pulsating animation
 let pulsePhase = 0; // Animation phase for pulsating effect
 
 // Players (for testing, will come from backend)
-let players = [
-    { id: 0, name: 'Player 1', color: PLAYER_COLORS[0], score: 0 },
-    { id: 1, name: 'Player 2', color: PLAYER_COLORS[1], score: 0 }
-];
+// Ensure players get unique colors
+function getUniquePlayers() {
+    const color1 = PLAYER_COLORS[0];
+    let color2 = PLAYER_COLORS[1];
+
+    // Ensure second player has different color
+    if (color1 === color2) {
+        color2 = PLAYER_COLORS[2] || PLAYER_COLORS[1];
+    }
+
+    return [
+        { id: 0, name: 'Player 1', color: color1, score: 0 },
+        { id: 1, name: 'Player 2', color: color2, score: 0 }
+    ];
+}
+
+let players = getUniquePlayers();
 
 /**
  * Initialize canvas and set up event listeners
@@ -196,6 +579,68 @@ function redraw() {
     drawLines(); // Lines drawn by players
     drawDragPreview(); // Preview line during drag
     drawDots(); // Grid dots (on top so they're clickable)
+
+    // Update canvas container color for active player
+    updateCanvasContainerColor();
+}
+
+/**
+ * Darken a hex color by a percentage
+ * @param {string} color - Hex color (e.g., '#FF0000')
+ * @param {number} percent - Percentage to darken (0-100)
+ * @returns {string} Darkened hex color
+ */
+function darkenColor(color, percent) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+
+    const factor = 1 - (percent / 100);
+    const newR = Math.round(r * factor);
+    const newG = Math.round(g * factor);
+    const newB = Math.round(b * factor);
+
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Brighten a hex color by a percentage
+ * @param {string} color - Hex color (e.g., '#FF0000')
+ * @param {number} percent - Percentage to brighten (0-100)
+ * @returns {string} Brightened hex color
+ */
+function brightenColor(color, percent) {
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+
+    const factor = percent / 100;
+    const newR = Math.min(255, Math.round(r + (255 - r) * factor));
+    const newG = Math.min(255, Math.round(g + (255 - g) * factor));
+    const newB = Math.min(255, Math.round(b + (255 - b) * factor));
+
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+/**
+ * Update the canvas container background color to match active player (50% darker)
+ */
+function updateCanvasContainerColor() {
+    const canvasContainer = canvas.parentElement;
+    if (!canvasContainer) return;
+
+    // Check if we're on the game screen
+    const gameScreen = document.getElementById('game-screen');
+    const isGameActive = gameScreen && !gameScreen.classList.contains('hidden');
+
+    if (isGameActive && players && players[currentPlayer]) {
+        const playerColor = players[currentPlayer].color || '#0F3460';
+        const darkenedColor = darkenColor(playerColor, 75); // 75% darker
+        canvasContainer.style.backgroundColor = darkenedColor;
+    } else {
+        // Reset to default color when not in game
+        canvasContainer.style.backgroundColor = '';
+    }
 }
 
 /**
@@ -209,6 +654,7 @@ function drawSpecialSquareIndicators() {
         specialSquares = GameService.getSpecialSquares();
     } else {
         // Use local special squares for single-player mode
+        validateSpecialSquares(); // Ensure counts are correct before drawing
         specialSquares = localSpecialSquares;
     }
 
@@ -219,7 +665,7 @@ function drawSpecialSquareIndicators() {
 
     const INSET_MARGIN = 8; // Pixels to inset from box edges
 
-    // Draw golden square indicators (solid gold inset square)
+    // Draw golden square indicators (solid gold inset square + star icon)
     if (specialSquares.golden && specialSquares.golden.length > 0) {
         ctx.save();
         specialSquares.golden.forEach(key => {
@@ -230,21 +676,27 @@ function drawSpecialSquareIndicators() {
 
                 const width = bottomRight.x - topLeft.x;
                 const height = bottomRight.y - topLeft.y;
+                const centerX = topLeft.x + width / 2;
+                const centerY = topLeft.y + height / 2;
 
-                // Draw solid gold inset square (smaller than box)
-                ctx.fillStyle = '#FFD700'; // Gold
+                // Draw solid gold inset square (smaller than box) with 25% opacity
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.25)'; // Gold at 25% opacity
                 ctx.fillRect(
                     topLeft.x + INSET_MARGIN,
                     topLeft.y + INSET_MARGIN,
                     width - (INSET_MARGIN * 2),
                     height - (INSET_MARGIN * 2)
                 );
+
+                // Draw gold star icon in center (original size, 25% darker)
+                const radius = Math.min(width, height) * 0.25; // Original size
+                drawStar(centerX, centerY, 5, radius, radius * 0.5, '#BFA100'); // 25% darker gold
             }
         });
         ctx.restore();
     }
 
-    // Draw penalty square indicators (solid red inset square)
+    // Draw penalty square indicators (solid red inset square + X icon)
     if (specialSquares.penalty && specialSquares.penalty.length > 0) {
         ctx.save();
         specialSquares.penalty.forEach(key => {
@@ -255,15 +707,41 @@ function drawSpecialSquareIndicators() {
 
                 const width = bottomRight.x - topLeft.x;
                 const height = bottomRight.y - topLeft.y;
+                const centerX = topLeft.x + width / 2;
+                const centerY = topLeft.y + height / 2;
 
-                // Draw solid red inset square (smaller than box)
-                ctx.fillStyle = '#FF4444'; // Red
+                // Draw solid red inset square (smaller than box) with 25% opacity
+                ctx.fillStyle = 'rgba(255, 68, 68, 0.25)'; // Red at 25% opacity
                 ctx.fillRect(
                     topLeft.x + INSET_MARGIN,
                     topLeft.y + INSET_MARGIN,
                     width - (INSET_MARGIN * 2),
                     height - (INSET_MARGIN * 2)
                 );
+
+                // Draw red X icon in center (50% smaller, 200% thicker, 25% darker)
+                const size = Math.min(width, height) * 0.125; // Reduced from 0.25 to 0.125 (50% smaller)
+                ctx.lineCap = 'round';
+
+                // Draw black stroke outline first (slightly thicker)
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 14; // Slightly thicker for outline effect
+                ctx.beginPath();
+                ctx.moveTo(centerX - size, centerY - size);
+                ctx.lineTo(centerX + size, centerY + size);
+                ctx.moveTo(centerX + size, centerY - size);
+                ctx.lineTo(centerX - size, centerY + size);
+                ctx.stroke();
+
+                // Draw red X on top
+                ctx.strokeStyle = '#BF3333'; // 25% darker red
+                ctx.lineWidth = 12;
+                ctx.beginPath();
+                ctx.moveTo(centerX - size, centerY - size);
+                ctx.lineTo(centerX + size, centerY + size);
+                ctx.moveTo(centerX + size, centerY - size);
+                ctx.lineTo(centerX - size, centerY + size);
+                ctx.stroke();
             }
         });
         ctx.restore();
@@ -282,6 +760,8 @@ function drawSpecialSquareIndicators() {
 function drawStar(cx, cy, spikes, outerRadius, innerRadius, color) {
     ctx.save();
     ctx.fillStyle = color;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1;
     ctx.beginPath();
 
     let rot = Math.PI / 2 * 3;
@@ -306,6 +786,7 @@ function drawStar(cx, cy, spikes, outerRadius, innerRadius, color) {
     ctx.lineTo(cx, cy - outerRadius);
     ctx.closePath();
     ctx.fill();
+    ctx.stroke(); // Add 1px black stroke
     ctx.restore();
 }
 
@@ -316,7 +797,7 @@ function drawStar(cx, cy, spikes, outerRadius, innerRadius, color) {
 function drawDots() {
     const defaultColor = getComputedStyle(document.documentElement)
         .getPropertyValue('--dot-color').trim() || '#FFFFFF';
-    const playerColor = PLAYER_COLORS[currentPlayer] || '#FFFFFF';
+    const playerColor = players[currentPlayer] ? players[currentPlayer].color : '#FFFFFF';
 
     for (let row = 0; row < GRID_SIZE; row++) {
         for (let col = 0; col < GRID_SIZE; col++) {
@@ -336,9 +817,12 @@ function drawDots() {
                 ctx.shadowColor = playerColor;
                 ctx.shadowBlur = 15;
                 ctx.fillStyle = playerColor;
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.stroke(); // 1px black stroke
                 ctx.restore();
             } else if (isSnapTarget) {
                 // Highlighted snap target
@@ -346,16 +830,22 @@ function drawDots() {
                 ctx.shadowColor = playerColor;
                 ctx.shadowBlur = 10;
                 ctx.fillStyle = playerColor + 'AA'; // Semi-transparent
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.arc(pos.x, pos.y, DOT_RADIUS_ACTIVE * 0.9, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.stroke(); // 1px black stroke
                 ctx.restore();
             } else {
                 // Normal dot
                 ctx.fillStyle = defaultColor;
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.arc(pos.x, pos.y, DOT_RADIUS, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.stroke(); // 1px black stroke
             }
         }
     }
@@ -374,31 +864,15 @@ function drawBoxes() {
         const centerX = topLeft.x + width / 2;
         const centerY = topLeft.y + height / 2;
 
-        const color = PLAYER_COLORS[box.ownerId] || '#FFFFFF';
+        // Use the player's stored color, not the local PLAYER_COLORS array
+        const player = players.find(p => p.id === box.ownerId);
+        const color = player ? player.color : '#FFFFFF';
         ctx.fillStyle = color + '40'; // Add 40 for ~25% opacity (hex alpha)
 
         ctx.fillRect(topLeft.x, topLeft.y, width, height);
 
-        // Draw completion icon for special squares
-        if (box.type === 'penalty') {
-            // Draw red X in center
-            const size = Math.min(width, height) * 0.25; // Proportional to box size
-            ctx.save();
-            ctx.strokeStyle = '#FF4444';
-            ctx.lineWidth = 4;
-            ctx.lineCap = 'round';
-            ctx.beginPath();
-            ctx.moveTo(centerX - size, centerY - size);
-            ctx.lineTo(centerX + size, centerY + size);
-            ctx.moveTo(centerX + size, centerY - size);
-            ctx.lineTo(centerX - size, centerY + size);
-            ctx.stroke();
-            ctx.restore();
-        } else if (box.type === 'golden') {
-            // Draw gold star in center
-            const radius = Math.min(width, height) * 0.22; // Proportional to box size
-            drawStar(centerX, centerY, 5, radius, radius * 0.5, '#FFD700');
-        }
+        // Completed boxes no longer show special square icons
+        // Icons only appear on uncompleted special squares
     }
 }
 
@@ -410,7 +884,9 @@ function drawLines() {
     ctx.lineCap = 'round';
 
     for (const line of lines) {
-        const color = PLAYER_COLORS[line.ownerId] || '#FFFFFF';
+        // Use the player's stored color, not the local PLAYER_COLORS array
+        const player = players.find(p => p.id === line.ownerId);
+        const color = player ? player.color : '#FFFFFF';
         ctx.strokeStyle = color;
 
         const dot1 = getDotPosition(line.row, line.col);
@@ -438,7 +914,7 @@ function drawDragPreview() {
     if (!isDragging || !dragStartDot || !dragCurrentPos) return;
 
     const startPos = getDotPosition(dragStartDot.row, dragStartDot.col);
-    const playerColor = PLAYER_COLORS[currentPlayer] || '#FFFFFF';
+    const playerColor = players[currentPlayer] ? players[currentPlayer].color : '#FFFFFF';
 
     // Determine end position: snap to dot if available, otherwise follow cursor
     let endPos;
@@ -701,6 +1177,14 @@ function tryPlaceLine(dot1, dot2) {
             }
         }
         // Player stays as current player (normal box completion behavior)
+    }
+
+    // Immediately replace completed special squares with the same type
+    if (result.hasGolden) {
+        replenishSpecialSquare('golden');
+    }
+    if (result.hasPenalty) {
+        replenishSpecialSquare('penalty');
     }
 
     // Increment turn counter and check for special square movement
@@ -1128,6 +1612,19 @@ function updateScoreboard() {
     const scoreboardEl = document.getElementById('scoreboard');
     if (!scoreboardEl) return;
 
+    // Set CSS variables for active player color (50% brighter)
+    if (players[currentPlayer]) {
+        const activeColor = players[currentPlayer].color;
+        const brighterColor = brightenColor(activeColor, 50); // 50% brighter
+        const r = parseInt(brighterColor.slice(1, 3), 16);
+        const g = parseInt(brighterColor.slice(3, 5), 16);
+        const b = parseInt(brighterColor.slice(5, 7), 16);
+
+        document.documentElement.style.setProperty('--active-player-color', brighterColor);
+        document.documentElement.style.setProperty('--active-player-glow-start', `rgba(${r}, ${g}, ${b}, 0.5)`);
+        document.documentElement.style.setProperty('--active-player-glow-end', `rgba(${r}, ${g}, ${b}, 0.8)`);
+    }
+
     // Clear existing content
     scoreboardEl.innerHTML = '';
 
@@ -1144,7 +1641,7 @@ function updateScoreboard() {
         // Player name with color indicator
         const nameEl = document.createElement('div');
         nameEl.className = 'score-name';
-        nameEl.innerHTML = `<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${player.color};margin-right:6px;"></span>${player.name}`;
+        nameEl.innerHTML = `<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${player.color};margin-right:6px;border:1px solid #FFFFFF;box-sizing:border-box;"></span>${player.name}`;
 
         // Score value
         const scoreEl = document.createElement('div');
@@ -1226,7 +1723,7 @@ function showGameOver() {
             scoreItem.className = 'final-score-item';
             scoreItem.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${player.color};"></span>
+                    <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${player.color};border:1px solid #FFFFFF;box-sizing:border-box;"></span>
                     <strong>${player.name}</strong>
                 </div>
                 <div style="font-size:1.5rem;font-weight:700;">${player.score}</div>
@@ -1298,6 +1795,14 @@ function updateBoardFromGameState(gameState) {
                 bankedTurns: player.bankedTurns || 0
             });
         });
+    }
+
+    // Update canvas container styling based on current player
+    if (players[currentPlayer]) {
+        const currentPlayerData = players[currentPlayer];
+        // Check if it's the local player's turn (pulse only shows for local player)
+        const isLocalPlayer = typeof GameService !== 'undefined' && GameService.isMyTurn && GameService.isMyTurn();
+        updateCanvasContainerStyle(currentPlayerData.color, currentPlayerData.bankedTurns || 0, isLocalPlayer);
     }
 
     // Redraw the board with updated state
@@ -1378,12 +1883,10 @@ function resetBoardState() {
     // Clear input state
     clearInputState();
 
-    // Reset players to default 2-player setup
+    // Reset players to default 2-player setup with unique colors
     players.length = 0;
-    players.push(
-        { id: 0, name: 'Player 1', color: PLAYER_COLORS[0], score: 0 },
-        { id: 1, name: 'Player 2', color: PLAYER_COLORS[1], score: 0 }
-    );
+    const newPlayers = getUniquePlayers();
+    players.push(...newPlayers);
 
     // Redraw empty board
     redraw();
@@ -1412,8 +1915,49 @@ function getRandomMoveTurn() {
 }
 
 /**
+ * Validate and fix special square counts
+ * Ensures exactly 1 golden and 2 penalties
+ */
+function validateSpecialSquares() {
+    // Remove completed squares
+    localSpecialSquares.golden = localSpecialSquares.golden.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+    localSpecialSquares.penalty = localSpecialSquares.penalty.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+    const currentSpecial = [...localSpecialSquares.golden, ...localSpecialSquares.penalty];
+    const availablePositions = uncompletedPositions.filter(pos => !currentSpecial.includes(pos));
+
+    if (availablePositions.length === 0) return;
+
+    const shuffled = [...availablePositions].sort(() => Math.random() - 0.5);
+    let nextIndex = 0;
+
+    // Ensure exactly 1 golden
+    while (localSpecialSquares.golden.length < 1 && nextIndex < shuffled.length) {
+        localSpecialSquares.golden.push(shuffled[nextIndex++]);
+    }
+    while (localSpecialSquares.golden.length > 1) {
+        localSpecialSquares.golden.pop();
+    }
+
+    // Ensure exactly 2 penalties
+    while (localSpecialSquares.penalty.length < 2 && nextIndex < shuffled.length) {
+        localSpecialSquares.penalty.push(shuffled[nextIndex++]);
+    }
+    while (localSpecialSquares.penalty.length > 2) {
+        localSpecialSquares.penalty.pop();
+    }
+
+    console.log('Special squares validated:', localSpecialSquares);
+}
+
+/**
  * Initialize special squares at random positions
- * Places 2 penalty and 1 golden square
+ * Places 1 golden and 2 penalty squares
  */
 function initializeSpecialSquares() {
     // Skip if in multiplayer mode (GameService handles it)
@@ -1433,12 +1977,12 @@ function initializeSpecialSquares() {
     // Shuffle positions
     const shuffled = [...uncompletedPositions].sort(() => Math.random() - 0.5);
 
-    // Place 1 golden and 2 penalty squares
-    localSpecialSquares.golden.push(shuffled[0]);
-    localSpecialSquares.penalty.push(shuffled[1]);
-    localSpecialSquares.penalty.push(shuffled[2]);
+    // Place EXACTLY 1 golden and 2 penalty squares
+    localSpecialSquares.golden = [shuffled[0]];
+    localSpecialSquares.penalty = [shuffled[1], shuffled[2]];
 
     console.log('Special squares initialized:', localSpecialSquares);
+    validateSpecialSquares(); // Validate immediately
 }
 
 /**
@@ -1456,6 +2000,42 @@ function getUncompletedBoxPositions() {
         }
     }
     return positions;
+}
+
+/**
+ * Replenish a specific type of special square immediately when completed
+ * @param {string} type - 'golden' or 'penalty'
+ */
+function replenishSpecialSquare(type) {
+    // Skip if in multiplayer mode (GameService handles it)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    // Remove completed special squares of this type
+    localSpecialSquares[type] = localSpecialSquares[type].filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+    const currentSpecial = [...localSpecialSquares.golden, ...localSpecialSquares.penalty];
+    const availablePositions = uncompletedPositions.filter(pos => !currentSpecial.includes(pos));
+
+    if (availablePositions.length === 0) {
+        console.log(`No available positions to place new ${type} square`);
+        return;
+    }
+
+    // Pick a random available position
+    const shuffled = [...availablePositions].sort(() => Math.random() - 0.5);
+    const newPosition = shuffled[0];
+
+    // Add the new special square of the same type
+    localSpecialSquares[type].push(newPosition);
+
+    console.log(`${type} square completed! New ${type} square placed at ${newPosition}`);
+    console.log('Current special squares:', localSpecialSquares);
+    redraw();
 }
 
 /**

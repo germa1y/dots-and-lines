@@ -63,7 +63,43 @@ const firebaseConfig = {
 
 // Player color palette (supports up to 4 players)
 // Avoiding red (penalty) and gold (bonus) to prevent confusion
-const PLAYER_COLORS = ['#5B8DEE', '#4ECDC4', '#FF9F6B', '#A8E6CF']; // Blue, Teal, Orange, Mint
+// ROYGBIV primary colors - shuffled randomly for each game
+const ROYGBIV_COLORS = [
+  '#FF0000', // Red
+  '#FF7F00', // Orange
+  '#FFFF00', // Yellow
+  '#00FF00', // Green
+  '#0000FF', // Blue
+  '#4B0082', // Indigo
+  '#9400D3'  // Violet
+];
+
+/**
+ * Shuffle an array using Fisher-Yates algorithm
+ * @param {Array} array - Array to shuffle
+ * @returns {Array} New shuffled array
+ */
+function shuffleArray(array) {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+/**
+ * Generate shuffled player colors for a new game
+ * @returns {string[]} Array of 4 unique colors
+ */
+function generatePlayerColors() {
+  const shuffled = shuffleArray(ROYGBIV_COLORS);
+  return shuffled.slice(0, 4); // Take first 4 for max players
+}
+
+// Default player colors for local initialization (before game data loads)
+// Actual game colors come from gameData.playerColors stored in Firebase
+const PLAYER_COLORS = ROYGBIV_COLORS.slice(0, 4);
 
 // Initialize Firebase
 let app, database, auth;
@@ -139,9 +175,9 @@ function generateSpecialSquares(gridSize) {
     [positions[i], positions[j]] = [positions[j], positions[i]];
   }
 
-  // Pick 1-2 golden and 1-2 penalty squares
-  const goldenCount = Math.floor(Math.random() * 2) + 1; // 1 or 2
-  const penaltyCount = Math.floor(Math.random() * 2) + 1; // 1 or 2
+  // Pick exactly 1 golden (bonus) and 2 penalty squares
+  const goldenCount = 1;
+  const penaltyCount = 2;
 
   return {
     golden: positions.slice(0, goldenCount),
@@ -164,6 +200,7 @@ async function createGame(playerName, maxPlayers = 4) {
   const code = generateGameCode();
   const gameId = code.toLowerCase();
   const gridSize = 6; // 5x5 boxes
+  const playerColors = generatePlayerColors(); // Unique colors for this game
 
   const gameData = {
     code: code,
@@ -171,12 +208,13 @@ async function createGame(playerName, maxPlayers = 4) {
     hostId: user.uid,
     gridSize: gridSize,
     maxPlayers: Math.min(4, Math.max(2, maxPlayers)),
+    playerColors: playerColors, // Store colors in game document
 
     players: {
       0: {
         id: user.uid,
         name: playerName || 'Player 1',
-        color: PLAYER_COLORS[0],
+        color: playerColors[0],
         score: 0,
         bankedTurns: 0
       }
@@ -272,12 +310,15 @@ async function joinGame(code, playerName) {
   // Find next available player slot
   const playerIndex = currentPlayerCount;
 
+  // Get color from game's stored colors (ensures consistency across clients)
+  const playerColor = gameData.playerColors ? gameData.playerColors[playerIndex] : ROYGBIV_COLORS[playerIndex];
+
   // Add player to the game
   const updates = {};
   updates[`players/${playerIndex}`] = {
     id: user.uid,
     name: playerName || `Player ${playerIndex + 1}`,
-    color: PLAYER_COLORS[playerIndex],
+    color: playerColor,
     score: 0,
     bankedTurns: 0
   };
