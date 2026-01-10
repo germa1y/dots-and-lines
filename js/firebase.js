@@ -85,11 +85,14 @@ function initializeFirebase() {
 // Sign in anonymously
 async function signInAnonymously() {
   try {
+    console.log('Attempting anonymous sign-in...');
     const userCredential = await auth.signInAnonymously();
     console.log('Signed in anonymously:', userCredential.user.uid);
     return userCredential.user;
   } catch (error) {
-    console.error('Anonymous sign-in error:', error);
+    console.error('Anonymous sign-in error code:', error.code);
+    console.error('Anonymous sign-in error message:', error.message);
+    console.error('Full error:', error);
     throw error;
   }
 }

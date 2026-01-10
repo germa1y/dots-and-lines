@@ -397,6 +397,37 @@ button:disabled {
 }
 
 /* ========================================
+   Notification
+   ======================================== */
+
+.game-notification {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--accent);
+    color: var(--text-primary);
+    padding: 16px 32px;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    pointer-events: none;
+}
+
+.game-notification.hidden {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+}
+
+.game-notification.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ========================================
    Responsive Design (Tablet and Desktop)
    ======================================== */
 

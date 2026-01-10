@@ -234,7 +234,9 @@ Acceptance criteria:
 ### TASK-035: Test two-browser multiplayer
 - **Priority**: P0
 - **Source**: openspec/TASK-035
-- **Status**: pending
+- **Status**: blocked
+- **Blocked by**: Firebase Anonymous Authentication not enabled in Console
+- **Resolution**: Follow instructions in `docs/FIREBASE_AUTH_SETUP.md` to enable Anonymous auth in Firebase Console
 
 Acceptance criteria:
 - [ ] Open game in two browser tabs
@@ -314,10 +316,10 @@ Acceptance criteria:
 
 | Status | Count |
 |--------|-------|
-| Pending | 1 |
+| Pending | 0 |
 | In Progress | 0 |
 | Complete | 27 |
-| Blocked | 0 |
+| Blocked | 1 |
 
 ---
 

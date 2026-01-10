@@ -25,17 +25,17 @@ async function initLobby() {
     const initialized = FirebaseService.init();
     if (!initialized) {
       console.error('Failed to initialize Firebase');
-      return false;
+      return { success: false, error: 'Firebase initialization failed' };
     }
 
     // Sign in anonymously
     await FirebaseService.signIn();
 
     console.log('Lobby initialized');
-    return true;
+    return { success: true };
   } catch (error) {
     console.error('Lobby initialization failed:', error);
-    return false;
+    return { success: false, error: error.code || error.message || 'Unknown error' };
   }
 }
 
@@ -145,6 +145,10 @@ function handleLobbyUpdate(gameData) {
 
   // If game started, transition to game screen
   if (gameData.status === 'active') {
+    // Clean up lobby subscription FIRST (before game subscription)
+    // This prevents race conditions with multiple listeners
+    cleanupLobby(false); // false = don't leave the game
+
     // Initialize game session
     if (typeof GameService !== 'undefined' && GameService.initSession) {
       GameService.initSession(currentLobbyGameId, currentPlayerIndex);
@@ -154,9 +158,6 @@ function handleLobbyUpdate(gameData) {
     if (typeof showScreen === 'function') {
       showScreen('game');
     }
-
-    // Clean up lobby subscription (game.js will handle game state now)
-    cleanupLobby(false); // false = don't leave the game
   }
 
   console.log('Lobby updated:', gameData.code, playersArray.length, 'players');

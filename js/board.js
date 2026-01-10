@@ -32,7 +32,6 @@ let gridOffsetY; // Y offset to center the grid
 let lines = []; // Array of line objects: { row, col, direction, ownerId }
 let boxes = []; // Array of box objects: { row, col, ownerId }
 let currentPlayer = 0; // Current player index (for testing, will come from backend)
-// PLAYER_COLORS defined in firebase.js
 
 // Enhanced input state
 let activeDot = null; // Currently activated dot: { row, col } or null
@@ -184,10 +183,131 @@ function redraw() {
     clearCanvas();
 
     // Draw game elements in order (boxes behind lines, then drag preview)
+    drawSpecialSquareIndicators(); // Special square markers (before boxes)
     drawBoxes(); // Filled boxes (behind everything)
     drawLines(); // Lines drawn by players
     drawDragPreview(); // Preview line during drag
     drawDots(); // Grid dots (on top so they're clickable)
+}
+
+/**
+ * Draw special square indicators (golden and penalty)
+ * Shows visual markers for uncompleted special squares
+ */
+function drawSpecialSquareIndicators() {
+    // Get special squares from GameService if available
+    let specialSquares = { golden: [], penalty: [] };
+    if (typeof GameService !== 'undefined' && GameService.getSpecialSquares) {
+        specialSquares = GameService.getSpecialSquares();
+    }
+
+    // Helper to check if box is already completed
+    const isCompleted = (key) => {
+        return boxes.some(b => `${b.row},${b.col}` === key);
+    };
+
+    // Draw golden square indicators (star icon with golden border)
+    if (specialSquares.golden && specialSquares.golden.length > 0) {
+        ctx.save();
+        specialSquares.golden.forEach(key => {
+            if (!isCompleted(key)) {
+                const [row, col] = key.split(',').map(Number);
+                const topLeft = getDotPosition(row, col);
+                const bottomRight = getDotPosition(row + 1, col + 1);
+
+                const width = bottomRight.x - topLeft.x;
+                const height = bottomRight.y - topLeft.y;
+                const centerX = topLeft.x + width / 2;
+                const centerY = topLeft.y + height / 2;
+
+                // Draw golden border
+                ctx.strokeStyle = '#FFD700';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([5, 3]);
+                ctx.strokeRect(topLeft.x + 2, topLeft.y + 2, width - 4, height - 4);
+                ctx.setLineDash([]);
+
+                // Draw star icon in center
+                drawStar(centerX, centerY, 5, 12, 6, '#FFD700');
+            }
+        });
+        ctx.restore();
+    }
+
+    // Draw penalty square indicators (X icon with red border)
+    if (specialSquares.penalty && specialSquares.penalty.length > 0) {
+        ctx.save();
+        specialSquares.penalty.forEach(key => {
+            if (!isCompleted(key)) {
+                const [row, col] = key.split(',').map(Number);
+                const topLeft = getDotPosition(row, col);
+                const bottomRight = getDotPosition(row + 1, col + 1);
+
+                const width = bottomRight.x - topLeft.x;
+                const height = bottomRight.y - topLeft.y;
+                const centerX = topLeft.x + width / 2;
+                const centerY = topLeft.y + height / 2;
+
+                // Draw red border
+                ctx.strokeStyle = '#FF4444';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([5, 3]);
+                ctx.strokeRect(topLeft.x + 2, topLeft.y + 2, width - 4, height - 4);
+                ctx.setLineDash([]);
+
+                // Draw X icon in center
+                const size = 14;
+                ctx.strokeStyle = '#FF4444';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(centerX - size, centerY - size);
+                ctx.lineTo(centerX + size, centerY + size);
+                ctx.moveTo(centerX + size, centerY - size);
+                ctx.lineTo(centerX - size, centerY + size);
+                ctx.stroke();
+            }
+        });
+        ctx.restore();
+    }
+}
+
+/**
+ * Draw a star shape
+ * @param {number} cx - Center X
+ * @param {number} cy - Center Y
+ * @param {number} spikes - Number of spikes
+ * @param {number} outerRadius - Outer radius
+ * @param {number} innerRadius - Inner radius
+ * @param {string} color - Fill color
+ */
+function drawStar(cx, cy, spikes, outerRadius, innerRadius, color) {
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+
+    let rot = Math.PI / 2 * 3;
+    let x = cx;
+    let y = cy;
+    const step = Math.PI / spikes;
+
+    ctx.moveTo(cx, cy - outerRadius);
+
+    for (let i = 0; i < spikes; i++) {
+        x = cx + Math.cos(rot) * outerRadius;
+        y = cy + Math.sin(rot) * outerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+
+        x = cx + Math.cos(rot) * innerRadius;
+        y = cy + Math.sin(rot) * innerRadius;
+        ctx.lineTo(x, y);
+        rot += step;
+    }
+
+    ctx.lineTo(cx, cy - outerRadius);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
 }
 
 /**
@@ -583,6 +703,7 @@ function handlePointerMoveAt(x, y) {
         isDragging = true;
         activeDot = null; // Cancel click mode if we were in it
         startPulseAnimation();
+        canvas.classList.add('dragging'); // Add dragging cursor class
         console.log('Drag mode started');
     }
 
@@ -666,6 +787,7 @@ function handlePointerUpAt(x, y) {
     dragCurrentPos = null;
     dragSnapDot = null;
     pointerDownPos = null;
+    canvas.classList.remove('dragging'); // Remove dragging cursor class
 }
 
 /**
@@ -676,6 +798,7 @@ function handlePointerCancel() {
     dragStartDot = null;
     isDragging = false;
     pointerDownPos = null;
+    canvas.classList.remove('dragging'); // Remove dragging cursor class
     redraw();
 }
 
@@ -1164,4 +1287,35 @@ function showGameOverFromState(gameState) {
 
     // Use the standard game over display
     showGameOver();
+}
+
+/**
+ * Reset the board to initial state
+ * Called when starting a new game or returning to menu
+ */
+function resetBoardState() {
+    // Clear lines and boxes
+    lines.length = 0;
+    boxes.length = 0;
+
+    // Reset current player
+    currentPlayer = 0;
+
+    // Clear input state
+    clearInputState();
+
+    // Reset players to default 2-player setup
+    players.length = 0;
+    players.push(
+        { id: 0, name: 'Player 1', color: PLAYER_COLORS[0], score: 0 },
+        { id: 1, name: 'Player 2', color: PLAYER_COLORS[1], score: 0 }
+    );
+
+    // Redraw empty board
+    redraw();
+
+    // Update UI
+    updateScoreboard();
+
+    console.log('Board state reset');
 }

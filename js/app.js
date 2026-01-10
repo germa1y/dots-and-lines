@@ -3,24 +3,17 @@
  * Initializes the game and handles app-level state
  */
 
+// Track auth state
+let authReady = false;
+
 // Wait for DOM to be ready
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Dots and Lines - App initialized');
 
-    // Initialize lobby (Firebase + Auth)
-    if (typeof LobbyService !== 'undefined') {
-        const success = await LobbyService.init();
-        if (success) {
-            console.log('Firebase and Auth ready');
-        } else {
-            console.error('Failed to initialize Firebase/Auth');
-        }
-    }
-
     // Show menu screen (landing page)
     showScreen('menu');
 
-    // Set up menu screen
+    // Set up menu screen (buttons start disabled)
     setupMenuScreen();
 
     // Set up lobby screen
@@ -35,7 +28,66 @@ document.addEventListener('DOMContentLoaded', async function() {
     } else {
         console.error('initCanvas function not found - board.js may not be loaded');
     }
+
+    // Initialize lobby (Firebase + Auth) - do this after UI is set up
+    if (typeof LobbyService !== 'undefined') {
+        const result = await LobbyService.init();
+        if (result.success || result === true) {
+            console.log('Firebase and Auth ready');
+            authReady = true;
+            enableGameButtons();
+        } else {
+            console.error('Failed to initialize Firebase/Auth:', result.error);
+            showAuthError(result.error || 'Unknown error');
+        }
+    }
 });
+
+/**
+ * Enable game buttons once auth is ready
+ */
+function enableGameButtons() {
+    const createGameBtn = document.getElementById('create-game-btn');
+    const joinGameBtn = document.getElementById('join-game-btn');
+
+    if (createGameBtn) {
+        createGameBtn.disabled = false;
+        createGameBtn.textContent = 'Create Game';
+    }
+    if (joinGameBtn) {
+        joinGameBtn.disabled = false;
+        joinGameBtn.textContent = 'Join Game';
+    }
+    console.log('Game buttons enabled - auth ready');
+}
+
+/**
+ * Show auth error to user
+ * @param {string} errorMessage - The error message to display
+ */
+function showAuthError(errorMessage) {
+    const createGameBtn = document.getElementById('create-game-btn');
+    const joinGameBtn = document.getElementById('join-game-btn');
+
+    if (createGameBtn) {
+        createGameBtn.textContent = 'Connection Error';
+    }
+    if (joinGameBtn) {
+        joinGameBtn.textContent = 'Connection Error';
+    }
+
+    // Display error with details
+    let message = 'Failed to connect to game server.\n\nError: ' + errorMessage;
+
+    // Add helpful hints based on error type
+    if (errorMessage.includes('auth/operation-not-allowed')) {
+        message += '\n\nThis means Anonymous Authentication is not enabled in Firebase Console.';
+    }
+
+    message += '\n\nPlease check the browser console (F12) for more details.';
+
+    alert(message);
+}
 
 /**
  * Set up menu screen functionality
@@ -45,6 +97,16 @@ function setupMenuScreen() {
     const createGameBtn = document.getElementById('create-game-btn');
     const joinGameBtn = document.getElementById('join-game-btn');
     const gameCodeInput = document.getElementById('game-code-input');
+
+    // Disable buttons until auth is ready
+    if (createGameBtn) {
+        createGameBtn.disabled = true;
+        createGameBtn.textContent = 'Connecting...';
+    }
+    if (joinGameBtn) {
+        joinGameBtn.disabled = true;
+        joinGameBtn.textContent = 'Connecting...';
+    }
 
     // Load player name from localStorage
     const savedName = localStorage.getItem('dotsAndLinesPlayerName');
@@ -62,6 +124,12 @@ function setupMenuScreen() {
     // Create Game button
     if (createGameBtn) {
         createGameBtn.addEventListener('click', async function() {
+            // Safety check - auth must be ready
+            if (!authReady) {
+                alert('Still connecting to server. Please wait...');
+                return;
+            }
+
             const playerName = playerNameInput ? playerNameInput.value.trim() : '';
 
             if (!playerName) {
@@ -98,6 +166,12 @@ function setupMenuScreen() {
     // Join Game button
     if (joinGameBtn) {
         joinGameBtn.addEventListener('click', async function() {
+            // Safety check - auth must be ready
+            if (!authReady) {
+                alert('Still connecting to server. Please wait...');
+                return;
+            }
+
             const playerName = playerNameInput ? playerNameInput.value.trim() : '';
             const gameCode = gameCodeInput ? gameCodeInput.value.trim().toUpperCase() : '';
 
@@ -228,23 +302,31 @@ function setupGameOverScreen() {
 
     // Play Again button
     if (playAgainBtn) {
-        playAgainBtn.addEventListener('click', function() {
+        playAgainBtn.addEventListener('click', async function() {
             console.log('Play again clicked');
+            // Leave the current game properly
+            if (typeof LobbyService !== 'undefined') {
+                await LobbyService.leaveLobby();
+            }
             // Clean up current game session
             if (typeof GameService !== 'undefined') {
                 GameService.cleanup();
             }
             // Reset local game state
             resetGameState();
-            // Go back to lobby to start a new game
+            // Go back to menu to start a new game
             showScreen('menu');
         });
     }
 
     // Back to Menu button
     if (backToMenuBtn) {
-        backToMenuBtn.addEventListener('click', function() {
+        backToMenuBtn.addEventListener('click', async function() {
             console.log('Back to menu clicked');
+            // Leave the game properly
+            if (typeof LobbyService !== 'undefined') {
+                await LobbyService.leaveLobby();
+            }
             // Clean up current game session
             if (typeof GameService !== 'undefined') {
                 GameService.cleanup();
@@ -345,26 +427,38 @@ function showScreen(screenName) {
  * Called when starting a new game or returning to menu
  */
 function resetGameState() {
-    // Reset game board state (defined in board.js)
-    if (typeof lines !== 'undefined') {
-        lines.length = 0;
+    // Reset board state via board.js API
+    if (typeof resetBoardState === 'function') {
+        resetBoardState();
+    } else {
+        console.warn('resetBoardState function not found - board.js may not be loaded');
     }
-    if (typeof boxes !== 'undefined') {
-        boxes.length = 0;
-    }
-    if (typeof currentPlayer !== 'undefined') {
-        currentPlayer = 0;
+}
+
+/**
+ * Show a notification message to the user
+ * @param {string} message - Message to display
+ * @param {number} duration - Duration in milliseconds (default 2000)
+ */
+function showNotification(message, duration = 2000) {
+    // Check if notification element exists, create if not
+    let notificationEl = document.getElementById('game-notification');
+
+    if (!notificationEl) {
+        notificationEl = document.createElement('div');
+        notificationEl.id = 'game-notification';
+        notificationEl.className = 'game-notification hidden';
+        document.body.appendChild(notificationEl);
     }
 
-    // Redraw empty board
-    if (typeof redraw === 'function') {
-        redraw();
-    }
+    // Set message and show
+    notificationEl.textContent = message;
+    notificationEl.classList.remove('hidden');
+    notificationEl.classList.add('show');
 
-    // Update scoreboard
-    if (typeof updateScoreboard === 'function') {
-        updateScoreboard();
-    }
-
-    console.log('Game state reset');
+    // Auto-hide after duration
+    setTimeout(() => {
+        notificationEl.classList.remove('show');
+        notificationEl.classList.add('hidden');
+    }, duration);
 }
