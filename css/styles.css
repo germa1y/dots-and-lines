@@ -333,17 +333,17 @@ button:disabled {
 }
 
 .score-item.active {
-    border: 2px solid #FFD700; /* Gold border */
-    box-shadow: 0 0 16px rgba(255, 215, 0, 0.5); /* Gold glow */
+    border: 2px solid #00FF00; /* GREEN border */
+    box-shadow: 0 0 16px rgba(0, 255, 0, 0.5); /* GREEN glow */
     animation: pulsate-glow 2s ease-in-out infinite;
 }
 
 @keyframes pulsate-glow {
     0%, 100% {
-        box-shadow: 0 0 16px rgba(255, 215, 0, 0.5);
+        box-shadow: 0 0 16px rgba(0, 255, 0, 0.5);
     }
     50% {
-        box-shadow: 0 0 24px rgba(255, 215, 0, 0.8);
+        box-shadow: 0 0 24px rgba(0, 255, 0, 0.8);
     }
 }
 
