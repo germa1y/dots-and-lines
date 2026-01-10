@@ -62,7 +62,8 @@ const firebaseConfig = {
 };
 
 // Player color palette (supports up to 4 players)
-const PLAYER_COLORS = ['#FF6B6B', '#4ECDC4', '#FFE66D', '#A8E6CF'];
+// Avoiding red (penalty) and gold (bonus) to prevent confusion
+const PLAYER_COLORS = ['#5B8DEE', '#4ECDC4', '#FF9F6B', '#A8E6CF']; // Blue, Teal, Orange, Mint
 
 // Initialize Firebase
 let app, database, auth;

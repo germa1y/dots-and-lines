@@ -27,11 +27,11 @@ body {
    ======================================== */
 
 :root {
-    /* Player Colors */
-    --player-1-color: #FF6B6B;
-    --player-2-color: #4ECDC4;
-    --player-3-color: #FFE66D;
-    --player-4-color: #A8E6CF;
+    /* Player Colors (avoiding red/gold to prevent confusion with penalty/bonus) */
+    --player-1-color: #5B8DEE; /* Blue */
+    --player-2-color: #4ECDC4; /* Teal */
+    --player-3-color: #FF9F6B; /* Orange */
+    --player-4-color: #A8E6CF; /* Mint */
 
     /* UI Colors */
     --bg-primary: #1A1A2E;
@@ -333,8 +333,18 @@ button:disabled {
 }
 
 .score-item.active {
-    border: 2px solid var(--accent);
-    box-shadow: 0 0 12px rgba(233, 69, 96, 0.4);
+    border: 2px solid #FFD700; /* Gold border */
+    box-shadow: 0 0 16px rgba(255, 215, 0, 0.5); /* Gold glow */
+    animation: pulsate-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulsate-glow {
+    0%, 100% {
+        box-shadow: 0 0 16px rgba(255, 215, 0, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 24px rgba(255, 215, 0, 0.8);
+    }
 }
 
 .score-name {

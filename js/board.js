@@ -32,6 +32,14 @@ let gridOffsetY; // Y offset to center the grid
 let lines = []; // Array of line objects: { row, col, direction, ownerId }
 let boxes = []; // Array of box objects: { row, col, ownerId }
 let currentPlayer = 0; // Current player index (for testing, will come from backend)
+let turnCounter = 0; // Track turns for special square movement
+let nextMoveTurn = getRandomMoveTurn(); // Next turn to move special squares (3-5 turns)
+
+// Special squares state (local mode only - multiplayer uses GameService)
+let localSpecialSquares = {
+    golden: [],
+    penalty: []
+};
 
 // Enhanced input state
 let activeDot = null; // Currently activated dot: { row, col } or null
@@ -192,13 +200,16 @@ function redraw() {
 
 /**
  * Draw special square indicators (golden and penalty)
- * Shows visual markers for uncompleted special squares
+ * Shows visual markers for uncompleted special squares as solid colored insets
  */
 function drawSpecialSquareIndicators() {
-    // Get special squares from GameService if available
+    // Get special squares from GameService if in multiplayer, otherwise use local
     let specialSquares = { golden: [], penalty: [] };
     if (typeof GameService !== 'undefined' && GameService.getSpecialSquares) {
         specialSquares = GameService.getSpecialSquares();
+    } else {
+        // Use local special squares for single-player mode
+        specialSquares = localSpecialSquares;
     }
 
     // Helper to check if box is already completed
@@ -206,7 +217,9 @@ function drawSpecialSquareIndicators() {
         return boxes.some(b => `${b.row},${b.col}` === key);
     };
 
-    // Draw golden square indicators (star icon with golden border)
+    const INSET_MARGIN = 8; // Pixels to inset from box edges
+
+    // Draw golden square indicators (solid gold inset square)
     if (specialSquares.golden && specialSquares.golden.length > 0) {
         ctx.save();
         specialSquares.golden.forEach(key => {
@@ -217,24 +230,21 @@ function drawSpecialSquareIndicators() {
 
                 const width = bottomRight.x - topLeft.x;
                 const height = bottomRight.y - topLeft.y;
-                const centerX = topLeft.x + width / 2;
-                const centerY = topLeft.y + height / 2;
 
-                // Draw golden border
-                ctx.strokeStyle = '#FFD700';
-                ctx.lineWidth = 3;
-                ctx.setLineDash([5, 3]);
-                ctx.strokeRect(topLeft.x + 2, topLeft.y + 2, width - 4, height - 4);
-                ctx.setLineDash([]);
-
-                // Draw star icon in center
-                drawStar(centerX, centerY, 5, 12, 6, '#FFD700');
+                // Draw solid gold inset square (smaller than box)
+                ctx.fillStyle = '#FFD700'; // Gold
+                ctx.fillRect(
+                    topLeft.x + INSET_MARGIN,
+                    topLeft.y + INSET_MARGIN,
+                    width - (INSET_MARGIN * 2),
+                    height - (INSET_MARGIN * 2)
+                );
             }
         });
         ctx.restore();
     }
 
-    // Draw penalty square indicators (X icon with red border)
+    // Draw penalty square indicators (solid red inset square)
     if (specialSquares.penalty && specialSquares.penalty.length > 0) {
         ctx.save();
         specialSquares.penalty.forEach(key => {
@@ -245,26 +255,15 @@ function drawSpecialSquareIndicators() {
 
                 const width = bottomRight.x - topLeft.x;
                 const height = bottomRight.y - topLeft.y;
-                const centerX = topLeft.x + width / 2;
-                const centerY = topLeft.y + height / 2;
 
-                // Draw red border
-                ctx.strokeStyle = '#FF4444';
-                ctx.lineWidth = 3;
-                ctx.setLineDash([5, 3]);
-                ctx.strokeRect(topLeft.x + 2, topLeft.y + 2, width - 4, height - 4);
-                ctx.setLineDash([]);
-
-                // Draw X icon in center
-                const size = 14;
-                ctx.strokeStyle = '#FF4444';
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(centerX - size, centerY - size);
-                ctx.lineTo(centerX + size, centerY + size);
-                ctx.moveTo(centerX + size, centerY - size);
-                ctx.lineTo(centerX - size, centerY + size);
-                ctx.stroke();
+                // Draw solid red inset square (smaller than box)
+                ctx.fillStyle = '#FF4444'; // Red
+                ctx.fillRect(
+                    topLeft.x + INSET_MARGIN,
+                    topLeft.y + INSET_MARGIN,
+                    width - (INSET_MARGIN * 2),
+                    height - (INSET_MARGIN * 2)
+                );
             }
         });
         ctx.restore();
@@ -372,11 +371,34 @@ function drawBoxes() {
 
         const width = bottomRight.x - topLeft.x;
         const height = bottomRight.y - topLeft.y;
+        const centerX = topLeft.x + width / 2;
+        const centerY = topLeft.y + height / 2;
 
         const color = PLAYER_COLORS[box.ownerId] || '#FFFFFF';
         ctx.fillStyle = color + '40'; // Add 40 for ~25% opacity (hex alpha)
 
         ctx.fillRect(topLeft.x, topLeft.y, width, height);
+
+        // Draw completion icon for special squares
+        if (box.type === 'penalty') {
+            // Draw red X in center
+            const size = Math.min(width, height) * 0.25; // Proportional to box size
+            ctx.save();
+            ctx.strokeStyle = '#FF4444';
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(centerX - size, centerY - size);
+            ctx.lineTo(centerX + size, centerY + size);
+            ctx.moveTo(centerX + size, centerY - size);
+            ctx.lineTo(centerX - size, centerY + size);
+            ctx.stroke();
+            ctx.restore();
+        } else if (box.type === 'golden') {
+            // Draw gold star in center
+            const radius = Math.min(width, height) * 0.22; // Proportional to box size
+            drawStar(centerX, centerY, 5, radius, radius * 0.5, '#FFD700');
+        }
     }
 }
 
@@ -631,10 +653,10 @@ function tryPlaceLine(dot1, dot2) {
     addLine(line.row, line.col, line.direction, currentPlayer);
 
     // Check for completed boxes
-    const completedBoxes = checkAndCompleteBoxes(line, currentPlayer);
+    const result = checkAndCompleteBoxes(line, currentPlayer);
 
     // Update scores if boxes were completed
-    if (completedBoxes > 0) {
+    if (result.count > 0) {
         calculateScores();
         updateScoreboard();
     }
@@ -651,13 +673,43 @@ function tryPlaceLine(dot1, dot2) {
         return true;
     }
 
-    // If no boxes were completed, switch to next player
-    if (completedBoxes === 0) {
-        currentPlayer = (currentPlayer + 1) % players.length;
-        updateScoreboard();
+    // Turn logic:
+    // - No boxes completed: check for banked turn, otherwise switch to next player
+    // - Boxes completed: player gets another turn (stays as current player)
+    // - Golden box completed: player gets TWO more turns (banked turn system)
+    let turnEnded = false; // Track if turn actually changed hands
+    if (result.count === 0) {
+        // No boxes completed - check if player has banked turns
+        if (players[currentPlayer] && players[currentPlayer].bankedTurns > 0) {
+            // Use a banked turn to stay as current player
+            players[currentPlayer].bankedTurns--;
+            console.log('Used banked turn! Player', currentPlayer, 'keeps turn. Remaining banked:', players[currentPlayer].bankedTurns);
+            updateScoreboard();
+        } else {
+            // No banked turns - switch to next player
+            currentPlayer = (currentPlayer + 1) % players.length;
+            turnEnded = true; // Turn changed hands
+            updateScoreboard();
+        }
+    } else {
+        // Boxes completed - player naturally gets another turn
+        if (result.hasGolden) {
+            // Golden box gives ADDITIONAL banked turn for use later
+            if (players[currentPlayer]) {
+                players[currentPlayer].bankedTurns = (players[currentPlayer].bankedTurns || 0) + 1;
+                console.log('Golden box! Player', currentPlayer, 'banked an extra turn. Total banked:', players[currentPlayer].bankedTurns);
+            }
+        }
+        // Player stays as current player (normal box completion behavior)
     }
 
-    console.log('Line placed:', line, 'Boxes completed:', completedBoxes, 'Current player:', currentPlayer);
+    // Increment turn counter and check for special square movement
+    if (turnEnded) {
+        turnCounter++;
+        checkAndMoveSpecialSquares();
+    }
+
+    console.log('Line placed:', line, 'Boxes:', result.count, 'Golden:', result.hasGolden, 'Player:', currentPlayer);
     return true;
 }
 
@@ -994,10 +1046,12 @@ function isBoxCompleted(row, col) {
  * Check and complete boxes affected by a new line
  * @param {{row: number, col: number, direction: string}} line - The line that was just added
  * @param {number} ownerId - Player ID who placed the line
- * @returns {number} Number of boxes completed
+ * @returns {{count: number, hasGolden: boolean, hasPenalty: boolean}} Completion results
  */
 function checkAndCompleteBoxes(line, ownerId) {
     let completedCount = 0;
+    let hasGolden = false;
+    let hasPenalty = false;
     const boxesToCheck = [];
 
     // Determine which boxes might be affected by this line
@@ -1019,16 +1073,36 @@ function checkAndCompleteBoxes(line, ownerId) {
         }
     }
 
+    // Get special squares to check if completed boxes are special
+    let specialSquares = { golden: [], penalty: [] };
+    if (typeof GameService !== 'undefined' && GameService.getSpecialSquares) {
+        specialSquares = GameService.getSpecialSquares();
+    } else {
+        // Use local special squares for single-player mode
+        specialSquares = localSpecialSquares;
+    }
+
     // Check each affected box
     for (const box of boxesToCheck) {
         if (!isBoxOwned(box.row, box.col) && isBoxCompleted(box.row, box.col)) {
-            boxes.push({ row: box.row, col: box.col, ownerId });
+            // Check if this box is a special square
+            const boxKey = `${box.row},${box.col}`;
+            let boxType = null;
+            if (specialSquares.golden && specialSquares.golden.includes(boxKey)) {
+                boxType = 'golden';
+                hasGolden = true;
+            } else if (specialSquares.penalty && specialSquares.penalty.includes(boxKey)) {
+                boxType = 'penalty';
+                hasPenalty = true;
+            }
+
+            boxes.push({ row: box.row, col: box.col, ownerId, type: boxType });
             completedCount++;
-            console.log('Box completed:', box, 'by player', ownerId);
+            console.log('Box completed:', box, 'by player', ownerId, boxType ? `(${boxType})` : '');
         }
     }
 
-    return completedCount;
+    return { count: completedCount, hasGolden, hasPenalty };
 }
 
 /**
@@ -1317,5 +1391,132 @@ function resetBoardState() {
     // Update UI
     updateScoreboard();
 
+    // Reset turn counter and special squares
+    turnCounter = 0;
+    nextMoveTurn = getRandomMoveTurn();
+    initializeSpecialSquares();
+
     console.log('Board state reset');
+}
+
+// ============================================================================
+// SPECIAL SQUARE DYNAMIC MOVEMENT (Local Mode)
+// ============================================================================
+
+/**
+ * Get random turn count for next movement (3-5 turns)
+ * @returns {number} Random number between 3 and 5
+ */
+function getRandomMoveTurn() {
+    return Math.floor(Math.random() * 3) + 3; // 3, 4, or 5
+}
+
+/**
+ * Initialize special squares at random positions
+ * Places 2 penalty and 1 golden square
+ */
+function initializeSpecialSquares() {
+    // Skip if in multiplayer mode (GameService handles it)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    localSpecialSquares.golden = [];
+    localSpecialSquares.penalty = [];
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+    if (uncompletedPositions.length < 3) {
+        console.log('Not enough positions for special squares');
+        return;
+    }
+
+    // Shuffle positions
+    const shuffled = [...uncompletedPositions].sort(() => Math.random() - 0.5);
+
+    // Place 1 golden and 2 penalty squares
+    localSpecialSquares.golden.push(shuffled[0]);
+    localSpecialSquares.penalty.push(shuffled[1]);
+    localSpecialSquares.penalty.push(shuffled[2]);
+
+    console.log('Special squares initialized:', localSpecialSquares);
+}
+
+/**
+ * Get all uncompleted box positions
+ * @returns {string[]} Array of "row,col" keys for uncompleted boxes
+ */
+function getUncompletedBoxPositions() {
+    const positions = [];
+    for (let row = 0; row < GRID_SIZE - 1; row++) {
+        for (let col = 0; col < GRID_SIZE - 1; col++) {
+            const key = `${row},${col}`;
+            if (!boxes.some(b => `${b.row},${b.col}` === key)) {
+                positions.push(key);
+            }
+        }
+    }
+    return positions;
+}
+
+/**
+ * Move special squares to new random positions
+ * Called every 3-5 turns
+ */
+function moveSpecialSquares() {
+    // Skip if in multiplayer mode (GameService handles it)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    const uncompletedPositions = getUncompletedBoxPositions();
+
+    // Remove current special square positions that are already completed
+    localSpecialSquares.golden = localSpecialSquares.golden.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+    localSpecialSquares.penalty = localSpecialSquares.penalty.filter(key =>
+        !boxes.some(b => `${b.row},${b.col}` === key)
+    );
+
+    // Get positions available for new squares (excluding current special squares)
+    const currentSpecial = [...localSpecialSquares.golden, ...localSpecialSquares.penalty];
+    const availablePositions = uncompletedPositions.filter(pos => !currentSpecial.includes(pos));
+
+    if (availablePositions.length === 0) {
+        console.log('No available positions to move special squares');
+        return;
+    }
+
+    // Shuffle available positions
+    const shuffled = [...availablePositions].sort(() => Math.random() - 0.5);
+
+    // Maintain 2 penalty + 1 golden
+    localSpecialSquares.golden = [shuffled[0] || localSpecialSquares.golden[0]];
+    localSpecialSquares.penalty = [
+        shuffled[1] || localSpecialSquares.penalty[0],
+        shuffled[2] || localSpecialSquares.penalty[1]
+    ].filter(Boolean);
+
+    console.log('Special squares moved to new positions:', localSpecialSquares);
+
+    // Redraw to show new positions
+    redraw();
+}
+
+/**
+ * Check if it's time to move special squares and do so
+ * Called after each turn
+ */
+function checkAndMoveSpecialSquares() {
+    // Skip if in multiplayer mode
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        return;
+    }
+
+    if (turnCounter >= nextMoveTurn) {
+        moveSpecialSquares();
+        turnCounter = 0;
+        nextMoveTurn = getRandomMoveTurn();
+        console.log(`Special squares moved! Next movement in ${nextMoveTurn} turns`);
+    }
 }
