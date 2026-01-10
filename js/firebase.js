@@ -10,9 +10,9 @@
  *   status: "waiting",           // "waiting" | "active" | "finished"
  *   hostId: "uid1",              // User ID of the game creator
  *   gridSize: 6,                 // 6 dots = 5x5 boxes
- *   maxPlayers: 4,               // 2-4 players supported
+ *   maxPlayers: 7,               // 2-7 players supported
  *
- *   players: {                   // Object with index keys for 2-4 players
+ *   players: {                   // Object with index keys for 2-7 players
  *     0: { id: "uid1", name: "Player 1", color: "#FF6B6B", score: 0, bankedTurns: 0 },
  *     1: { id: "uid2", name: "Player 2", color: "#4ECDC4", score: 0, bankedTurns: 0 },
  *     2: { id: "uid3", name: "Player 3", color: "#FFE66D", score: 0, bankedTurns: 0 },
@@ -61,7 +61,7 @@ const firebaseConfig = {
   appId: "1:176209635268:web:26648016869663f4a8e691"
 };
 
-// Player color palette (supports up to 4 players)
+// Player color palette (supports up to 7 players)
 // Avoiding red (penalty) and gold (bonus) to prevent confusion
 // ROYGBIV primary colors - shuffled randomly for each game
 const ROYGBIV_COLORS = [
@@ -90,16 +90,16 @@ function shuffleArray(array) {
 
 /**
  * Generate shuffled player colors for a new game
- * @returns {string[]} Array of 4 unique colors
+ * @returns {string[]} Array of 7 unique colors
  */
 function generatePlayerColors() {
   const shuffled = shuffleArray(ROYGBIV_COLORS);
-  return shuffled.slice(0, 4); // Take first 4 for max players
+  return shuffled.slice(0, 7); // Take first 7 for max players
 }
 
 // Default player colors for local initialization (before game data loads)
 // Actual game colors come from gameData.playerColors stored in Firebase
-const PLAYER_COLORS = ROYGBIV_COLORS.slice(0, 4);
+const PLAYER_COLORS = ROYGBIV_COLORS.slice(0, 7);
 
 // Initialize Firebase
 let app, database, auth;
@@ -188,10 +188,10 @@ function generateSpecialSquares(gridSize) {
 /**
  * Create a new game in Firebase
  * @param {string} playerName - Name of the creating player
- * @param {number} maxPlayers - Maximum number of players (2-4)
+ * @param {number} maxPlayers - Maximum number of players (2-7)
  * @returns {Promise<{gameId: string, code: string}>}
  */
-async function createGame(playerName, maxPlayers = 4) {
+async function createGame(playerName, maxPlayers = 7) {
   const user = getCurrentUser();
   if (!user) {
     throw new Error('User not signed in');
@@ -207,7 +207,7 @@ async function createGame(playerName, maxPlayers = 4) {
     status: 'waiting',
     hostId: user.uid,
     gridSize: gridSize,
-    maxPlayers: Math.min(4, Math.max(2, maxPlayers)),
+    maxPlayers: Math.min(7, Math.max(2, maxPlayers)),
     playerColors: playerColors, // Store colors in game document
 
     players: {
@@ -501,6 +501,120 @@ async function endGame(gameId) {
   console.log('Game ended:', gameId);
 }
 
+// ============================================
+// SABOTAGE MECHANIC FUNCTIONS
+// ============================================
+
+/**
+ * Initialize sabotage state when game starts
+ * @param {string} gameId - Game ID
+ */
+async function initializeSabotage(gameId) {
+  console.log('[SABOTAGE] initializeSabotage called for game:', gameId);
+  const gameRef = getGameRef(gameId);
+  const updates = {
+    'sabotage/glowingDot': null,
+    'sabotage/glowStartTime': null,
+    'sabotage/glowDuration': null,
+    'sabotage/prohibitedDot': null,
+    'sabotage/prohibitedUntilPlayerIndex': null,
+    'sabotage/nextGlowTime': firebase.database.ServerValue.TIMESTAMP,
+    'sabotage/lastTappedBy': null
+  };
+  try {
+    await gameRef.update(updates);
+    console.log('[SABOTAGE] Sabotage initialized successfully');
+  } catch (error) {
+    console.error('[SABOTAGE] Error initializing sabotage:', error);
+  }
+}
+
+/**
+ * Start a new glow cycle - select random dot and timer
+ * @param {string} gameId - Game ID
+ * @param {string} dotKey - The dot to glow ("row,col")
+ */
+async function startGlowCycle(gameId, dotKey) {
+  console.log('[SABOTAGE] startGlowCycle called:', gameId, dotKey);
+  const duration = 250 + Math.random() * 750; // 250-1000ms
+  const gameRef = getGameRef(gameId);
+
+  const updates = {
+    'sabotage/glowingDot': dotKey,
+    'sabotage/glowStartTime': firebase.database.ServerValue.TIMESTAMP,
+    'sabotage/glowDuration': duration
+  };
+  try {
+    await gameRef.update(updates);
+    console.log('[SABOTAGE] Glow cycle started successfully:', dotKey, 'duration:', duration);
+  } catch (error) {
+    console.error('[SABOTAGE] Error starting glow cycle:', error);
+  }
+}
+
+/**
+ * Opponent taps glowing dot - make it prohibited
+ * @param {string} gameId - Game ID
+ * @param {string} dotKey - The dot that was tapped
+ * @param {string} tappingPlayerId - User ID of player who tapped
+ * @param {number} nextPlayerIndex - Player index whose turn will lift prohibition
+ */
+async function tapGlowingDot(gameId, dotKey, tappingPlayerId, nextPlayerIndex) {
+  const gameRef = getGameRef(gameId);
+  const updates = {
+    'sabotage/glowingDot': null,
+    'sabotage/glowStartTime': null,
+    'sabotage/glowDuration': null,
+    'sabotage/prohibitedDot': dotKey,
+    'sabotage/prohibitedUntilPlayerIndex': nextPlayerIndex,
+    'sabotage/lastTappedBy': tappingPlayerId
+  };
+  await gameRef.update(updates);
+  console.log('Dot prohibited:', dotKey, 'until player', nextPlayerIndex, 'turn');
+}
+
+/**
+ * Clear glow (timer expired) and schedule next glow cycle
+ * @param {string} gameId - Game ID
+ */
+async function clearGlowAndScheduleNext(gameId) {
+  const waitTime = 1000 + Math.random() * 4000; // 1-5 seconds
+  const nextTime = Date.now() + waitTime;
+  const gameRef = getGameRef(gameId);
+
+  const updates = {
+    'sabotage/glowingDot': null,
+    'sabotage/glowStartTime': null,
+    'sabotage/glowDuration': null,
+    'sabotage/nextGlowTime': nextTime
+  };
+  await gameRef.update(updates);
+  console.log('Glow cleared, next glow scheduled in', waitTime, 'ms');
+}
+
+/**
+ * Clear prohibition when turn changes to the designated player
+ * @param {string} gameId - Game ID
+ */
+async function clearProhibition(gameId) {
+  const gameRef = getGameRef(gameId);
+  const updates = {
+    'sabotage/prohibitedDot': null,
+    'sabotage/prohibitedUntilPlayerIndex': null,
+    'sabotage/nextGlowTime': firebase.database.ServerValue.TIMESTAMP
+  };
+  await gameRef.update(updates);
+  console.log('Prohibition cleared for game:', gameId);
+}
+
+/**
+ * Get current server timestamp for timing validation
+ * @returns {number} Current timestamp
+ */
+function getServerTime() {
+  return Date.now(); // Client-side approximation; Firebase handles actual sync
+}
+
 // Export for use in other modules
 window.FirebaseService = {
   // Core
@@ -526,6 +640,14 @@ window.FirebaseService = {
   // Helpers
   getGameRef: getGameRef,
   generateCode: generateGameCode,
+
+  // Sabotage mechanic
+  initializeSabotage,
+  startGlowCycle,
+  tapGlowingDot,
+  clearGlowAndScheduleNext,
+  clearProhibition,
+  getServerTime,
 
   // Constants
   PLAYER_COLORS: PLAYER_COLORS

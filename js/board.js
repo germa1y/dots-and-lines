@@ -46,6 +46,13 @@ let pulseParams = {
 // Set to true to show the pulse settings debug panel
 const SHOW_PULSE_DEBUG_PANEL = false;
 
+// Sabotage mechanic animation state
+let glowPulsePhase = 0;
+let glowAnimationId = null;
+let isGlowAnimating = false;
+let prohibitPulsePhase = 0;
+let missPenaltyFlashPhase = 0;
+
 /**
  * Create or update the pulse debug control panel
  * @param {boolean} show - Whether to show or hide the panel
@@ -317,77 +324,31 @@ function updateCanvasContainerStyle(playerColor, bankedTurns, isLocalPlayer) {
         pulseAnimationId = null;
     }
 
-    // Only show pulse effect if it's the local player's turn AND they have banked turns
+    // Only show breathing effect if it's the local player's turn AND they have banked turns
     if (bankedTurns > 0 && isLocalPlayer) {
-        // Show debug panel when pulsation is active
-        updatePulseDebugPanel(true, baseColor);
+        // Hide debug panel (not needed for breathing effect)
+        updatePulseDebugPanel(false);
 
-        // Radial pulsation - outward only, multiple rings starting from center
-        function animatePulse() {
-            // Update phase with speed
-            containerPulsePhase += pulseParams.speed;
+        // Breathing effect - slowly oscillate between darker and lighter
+        function animateBreathing() {
+            // Slow breathing speed
+            containerPulsePhase += 0.015;
 
-            // Get opacity for RGBA colors (only affects background, not game elements)
-            const opacity = pulseParams.opacity;
+            // Oscillate between 0 and 1 using sine wave (smooth breathing)
+            const breathAmount = 0.5 + 0.5 * Math.sin(containerPulsePhase);
 
-            // Build gradient with multiple rings based on frequency
-            const gradientStops = [];
-            const cycleLength = 100 / pulseParams.frequency; // Space between rings
+            // Interpolate between base color (darker) and a slightly brighter version
+            // At breathAmount=0: base color (75% darker)
+            // At breathAmount=1: slightly brighter (65% darker)
+            const darkenPercent = 90 - (breathAmount * 15); // 75% to 60%
+            const breathingColor = darkenColor(playerColor, darkenPercent);
 
-            // Convert base color to RGBA with opacity
-            const baseColorRgba = hexToRgba(baseColor, opacity);
+            container.style.background = breathingColor;
+            container.style.opacity = 1;
 
-            for (let i = 0; i < pulseParams.frequency; i++) {
-                // Get ring color from brightness slider (0=white, 50=player color, 100=black)
-                const ringColorHex = getRingColorFromBrightness(playerColor, pulseParams.ringBrightness[i]);
-                const ringColorRgba = hexToRgba(ringColorHex, opacity);
-
-                // Each ring is offset by its index
-                const ringOffset = (i / pulseParams.frequency);
-                const pulseAmount = ((containerPulsePhase + ringOffset) % 1); // 0 to 1, repeating
-
-                // Ring expands from 0% (center) to 100%+ (past edge)
-                const ringCenter = pulseAmount * 120; // 0% to 120%
-
-                // Calculate ring positions - starts from absolute center
-                // Inner fade goes from base color to ring color
-                const innerFadeStart = Math.max(0, ringCenter - pulseParams.thickness / 2 - pulseParams.innerFadeWidth);
-                const ringStart = Math.max(0, ringCenter - pulseParams.thickness / 2);
-                const ringEnd = ringCenter + pulseParams.thickness / 2;
-                // Outer fade goes from ring color back to base color
-                const outerFadeEnd = ringCenter + pulseParams.thickness / 2 + pulseParams.outerFadeWidth;
-
-                // Add gradient stops for this ring (inner fade -> ring -> outer fade)
-                if (innerFadeStart >= 0 && innerFadeStart <= 100) {
-                    gradientStops.push({ pos: innerFadeStart, color: baseColorRgba });
-                }
-                if (ringStart >= 0 && ringStart <= 100) {
-                    gradientStops.push({ pos: ringStart, color: ringColorRgba });
-                }
-                if (ringEnd >= 0 && ringEnd <= 100) {
-                    gradientStops.push({ pos: ringEnd, color: ringColorRgba });
-                }
-                if (outerFadeEnd >= 0 && outerFadeEnd <= 100) {
-                    gradientStops.push({ pos: outerFadeEnd, color: baseColorRgba });
-                }
-            }
-
-            // Sort stops by position
-            gradientStops.sort((a, b) => a.pos - b.pos);
-
-            // Build gradient string with RGBA colors (opacity baked in)
-            let gradientStr = `radial-gradient(circle at center, ${baseColorRgba} 0%`;
-            gradientStops.forEach(stop => {
-                gradientStr += `, ${stop.color} ${stop.pos}%`;
-            });
-            gradientStr += `, ${baseColorRgba} 100%)`;
-
-            container.style.background = gradientStr;
-            container.style.opacity = 1; // Keep container fully opaque
-
-            pulseAnimationId = requestAnimationFrame(animatePulse);
+            pulseAnimationId = requestAnimationFrame(animateBreathing);
         }
-        animatePulse();
+        animateBreathing();
     } else {
         // Hide debug panel when no banked turns
         updatePulseDebugPanel(false);
@@ -579,6 +540,7 @@ function redraw() {
     drawLines(); // Lines drawn by players
     drawDragPreview(); // Preview line during drag
     drawDots(); // Grid dots (on top so they're clickable)
+    drawSabotageElements(); // Sabotage glowing dots and prohibited symbols
 
     // Update canvas container color for active player
     updateCanvasContainerColor();
@@ -624,8 +586,12 @@ function brightenColor(color, percent) {
 
 /**
  * Update the canvas container background color to match active player (50% darker)
+ * Only updates if pulse animation is not running (to avoid interference)
  */
 function updateCanvasContainerColor() {
+    // Skip if pulse animation is running - it manages its own background
+    if (pulseAnimationId) return;
+
     const canvasContainer = canvas.parentElement;
     if (!canvasContainer) return;
 
@@ -938,6 +904,310 @@ function drawDragPreview() {
     ctx.restore();
 }
 
+// ============================================
+// SABOTAGE MECHANIC DRAWING FUNCTIONS
+// ============================================
+
+/**
+ * Draw prohibited symbol (circle with diagonal line) on a dot
+ * Same visual style as penalty X icon
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
+ */
+function drawProhibitedSymbol(x, y) {
+    // Same base size as penalty X icon (DOT_RADIUS * 2)
+    // Oscillate between 100% and 75% size (25% smaller at minimum)
+    const pulseFactor = 1 - 0.25 * (0.5 + 0.5 * Math.sin(prohibitPulsePhase));
+    const radius = DOT_RADIUS * 2 * pulseFactor;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    // Black outline circle (doubled thickness: was 4, now 8)
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Black outline diagonal line
+    ctx.beginPath();
+    ctx.moveTo(x - radius * 0.7, y - radius * 0.7);
+    ctx.lineTo(x + radius * 0.7, y + radius * 0.7);
+    ctx.stroke();
+
+    // Red circle on top (doubled thickness: was 3, now 6)
+    ctx.strokeStyle = '#BF3333';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Red diagonal line
+    ctx.beginPath();
+    ctx.moveTo(x - radius * 0.7, y - radius * 0.7);
+    ctx.lineTo(x + radius * 0.7, y + radius * 0.7);
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+/**
+ * Draw glowing red dot with pulsation (opponents only)
+ * @param {number} row - Dot row
+ * @param {number} col - Dot column
+ */
+function drawGlowingDot(row, col) {
+    const pos = getDotPosition(row, col);
+
+    // Pulsation: scale 1.0 to 1.25
+    const pulseFactor = 1 + 0.25 * Math.sin(glowPulsePhase);
+    const glowRadius = DOT_RADIUS * pulseFactor;
+
+    ctx.save();
+
+    // Outer glow effect
+    const gradient = ctx.createRadialGradient(
+        pos.x, pos.y, glowRadius * 0.5,
+        pos.x, pos.y, glowRadius * 3
+    );
+    gradient.addColorStop(0, 'rgba(255, 0, 0, 0.8)');
+    gradient.addColorStop(0.4, 'rgba(255, 0, 0, 0.4)');
+    gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, glowRadius * 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Core red dot
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Black stroke
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+/**
+ * Animate glowing dot pulsation and prohibit icon
+ */
+function animateGlowingDot() {
+    // Check if we should still be animating
+    if (!isGlowAnimating) {
+        glowAnimationId = null;
+        return;
+    }
+
+    // Get slowdown factor from miss penalty (1.0 = normal, 0.1 = 90% slower)
+    const slowdown = (typeof GameService !== 'undefined' && GameService.getMissPenaltySlowdown)
+        ? GameService.getMissPenaltySlowdown()
+        : 1.0;
+
+    // Glow pulse: ~2 cycles per second at 60fps, affected by miss penalty
+    glowPulsePhase += 0.15 * slowdown;
+
+    // Prohibit icon pulse: slower oscillation (~0.5 cycles per second)
+    prohibitPulsePhase += 0.05;
+
+    // Miss penalty flash: fast pulsing red vignette
+    missPenaltyFlashPhase += 0.2;
+
+    redraw();
+
+    // Only schedule next frame if still animating
+    if (isGlowAnimating) {
+        glowAnimationId = requestAnimationFrame(animateGlowingDot);
+    }
+}
+
+/**
+ * Start the glowing dot animation
+ */
+function startGlowAnimation() {
+    if (!isGlowAnimating) {
+        isGlowAnimating = true;
+        glowPulsePhase = 0;
+        animateGlowingDot();
+    }
+}
+
+/**
+ * Stop the glowing dot animation
+ */
+function stopGlowAnimation() {
+    isGlowAnimating = false;
+    if (glowAnimationId) {
+        cancelAnimationFrame(glowAnimationId);
+        glowAnimationId = null;
+    }
+}
+
+/**
+ * Draw miss penalty overlay (red pulsing border for opponents in penalty)
+ */
+function drawMissPenaltyOverlay() {
+    if (typeof GameService === 'undefined') return;
+    if (GameService.isMyTurn()) return; // Only show for opponents
+    if (!GameService.isMissPenaltyActive || !GameService.isMissPenaltyActive()) return;
+
+    // Pulsing red border/vignette effect
+    const pulseIntensity = 0.3 + 0.2 * Math.sin(missPenaltyFlashPhase);
+
+    ctx.save();
+
+    // Draw red vignette around edges
+    const gradient = ctx.createRadialGradient(
+        canvasWidth / 2, canvasHeight / 2, Math.min(canvasWidth, canvasHeight) * 0.3,
+        canvasWidth / 2, canvasHeight / 2, Math.max(canvasWidth, canvasHeight) * 0.7
+    );
+    gradient.addColorStop(0, 'rgba(255, 0, 0, 0)');
+    gradient.addColorStop(1, `rgba(255, 0, 0, ${pulseIntensity})`);
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    ctx.restore();
+}
+
+/**
+ * Draw sabotage elements (glowing dot and prohibited symbol)
+ */
+function drawSabotageElements() {
+    try {
+        if (typeof GameService === 'undefined') {
+            // Not in multiplayer mode
+            return;
+        }
+
+        const sabotage = GameService.getSabotageState();
+        const isMyTurn = GameService.isMyTurn();
+        const isMissPenalty = GameService.isMissPenaltyActive && GameService.isMissPenaltyActive();
+
+        // Draw miss penalty overlay first (behind other elements)
+        if (isMissPenalty) {
+            drawMissPenaltyOverlay();
+        }
+
+        if (!sabotage) {
+            // Still need animation for miss penalty overlay
+            if (isMissPenalty) {
+                startGlowAnimation();
+            } else {
+                stopGlowAnimation();
+            }
+            return;
+        }
+
+        // Draw prohibited symbol (visible to ALL players)
+        if (sabotage.prohibitedDot) {
+            const parts = sabotage.prohibitedDot.split(',');
+            if (parts.length === 2) {
+                const row = parseInt(parts[0], 10);
+                const col = parseInt(parts[1], 10);
+                if (!isNaN(row) && !isNaN(col)) {
+                    const pos = getDotPosition(row, col);
+                    drawProhibitedSymbol(pos.x, pos.y);
+                }
+            }
+        }
+
+        // Draw glowing dot (only for opponents, not active player)
+        let needsAnimation = false;
+
+        if (sabotage.glowingDot && !isMyTurn) {
+            const parts = sabotage.glowingDot.split(',');
+            if (parts.length === 2) {
+                const row = parseInt(parts[0], 10);
+                const col = parseInt(parts[1], 10);
+                if (!isNaN(row) && !isNaN(col)) {
+                    drawGlowingDot(row, col);
+                    needsAnimation = true;
+                }
+            }
+        }
+
+        // Also animate if there's a prohibited dot (for the prohibit icon oscillation)
+        if (sabotage.prohibitedDot) {
+            needsAnimation = true;
+        }
+
+        // Also animate during miss penalty (for the red overlay pulsing)
+        if (isMissPenalty) {
+            needsAnimation = true;
+        }
+
+        // Start or stop animation based on whether we need it
+        if (needsAnimation && GameService.isSabotageAnimationEnabled && GameService.isSabotageAnimationEnabled()) {
+            startGlowAnimation();
+        } else {
+            stopGlowAnimation();
+        }
+    } catch (error) {
+        console.error('[SABOTAGE-DRAW] Error:', error);
+        stopGlowAnimation();
+    }
+}
+
+/**
+ * Check if a point is near a glowing dot and handle the tap
+ * Returns true if the tap was handled (glowing dot was tapped)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ * @returns {boolean} True if glowing dot was tapped
+ */
+function checkGlowingDotTap(x, y) {
+    if (typeof GameService === 'undefined') return false;
+
+    const sabotage = GameService.getSabotageState();
+
+    // Only opponents can tap for sabotage
+    if (GameService.isMyTurn()) return false;
+
+    // If no glowing dot, no sabotage interaction possible
+    if (!sabotage || !sabotage.glowingDot) return false;
+
+    // Check if miss penalty is active - can't tap during penalty
+    if (GameService.isMissPenaltyActive && GameService.isMissPenaltyActive()) {
+        console.log('[SABOTAGE] Miss penalty active, tap ignored');
+        return true; // Consume the tap but don't process it
+    }
+
+    const [glowRow, glowCol] = sabotage.glowingDot.split(',').map(Number);
+    const glowDotPos = getDotPosition(glowRow, glowCol);
+
+    // Check distance from tap to glowing dot
+    const TAP_TOLERANCE = DOT_RADIUS * 4; // Generous tap area for the glowing dot
+    const distanceToGlow = Math.sqrt(Math.pow(x - glowDotPos.x, 2) + Math.pow(y - glowDotPos.y, 2));
+
+    if (distanceToGlow <= TAP_TOLERANCE) {
+        // Correct tap on glowing dot!
+        console.log('[SABOTAGE] Glowing dot tapped! Sabotaging dot:', sabotage.glowingDot);
+        GameService.handleGlowingDotTap(sabotage.glowingDot);
+        return true;
+    }
+
+    // Check if they tapped any other dot (miss) - use larger tolerance for sabotage
+    const MISS_TAP_TOLERANCE = DOT_RADIUS * 4;
+    const nearestDot = getNearestDot(x, y, MISS_TAP_TOLERANCE);
+    if (nearestDot) {
+        // They tapped a dot, but not the glowing one - MISS!
+        console.log('[SABOTAGE] Miss! Tapped wrong dot:', nearestDot.row, nearestDot.col);
+        if (GameService.triggerMissPenalty) {
+            GameService.triggerMissPenalty();
+        }
+        return true; // Consume the tap
+    }
+
+    // Tapped empty space - no penalty, just ignore
+    return false;
+}
+
 /**
  * Get canvas dimensions
  * @returns {{width: number, height: number}} Canvas dimensions in CSS pixels
@@ -1212,6 +1482,10 @@ function handlePointerDownAt(x, y) {
     pointerDownTime = Date.now();
     pointerDownPos = { x, y };
 
+    // Opponents can't initiate drags - only tap for sabotage
+    const isOpponent = typeof GameService !== 'undefined' && !GameService.isMyTurn();
+    if (isOpponent) return;
+
     const dot = getNearestDot(x, y);
 
     if (dot) {
@@ -1274,6 +1548,26 @@ function handlePointerUpAt(x, y) {
     const movedDistance = pointerDownPos ?
         Math.sqrt(Math.pow(x - pointerDownPos.x, 2) + Math.pow(y - pointerDownPos.y, 2)) : 0;
 
+    // Check if it's NOT our turn - opponents can only tap for sabotage
+    const isOpponent = typeof GameService !== 'undefined' && !GameService.isMyTurn();
+
+    if (isOpponent) {
+        // Opponents can only interact via sabotage taps
+        if (wasQuickTap && movedDistance < DRAG_THRESHOLD) {
+            checkGlowingDotTap(x, y); // This handles hits, misses, and penalties
+        }
+        // Reset all state and return - no normal gameplay for opponents
+        clearInputState();
+        dragStartDot = null;
+        isDragging = false;
+        dragCurrentPos = null;
+        dragSnapDot = null;
+        pointerDownPos = null;
+        canvas.classList.remove('dragging');
+        return;
+    }
+
+    // Active player - normal gameplay
     if (isDragging) {
         // Complete drag operation
         if (dragSnapDot && dragStartDot) {

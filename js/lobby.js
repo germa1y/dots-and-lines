@@ -42,10 +42,10 @@ async function initLobby() {
 /**
  * Create a new game and enter lobby
  * @param {string} playerName - Name of the host player
- * @param {number} maxPlayers - Maximum number of players (2-4)
+ * @param {number} maxPlayers - Maximum number of players (2-7)
  * @returns {Promise<{success: boolean, gameId?: string, code?: string, error?: string}>}
  */
-async function createGameAndJoinLobby(playerName, maxPlayers = 4) {
+async function createGameAndJoinLobby(playerName, maxPlayers = 7) {
   try {
     // Create game in Firebase
     const { gameId, code } = await FirebaseService.createGame(playerName, maxPlayers);

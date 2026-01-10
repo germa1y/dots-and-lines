@@ -14,6 +14,32 @@ let currentGameId = null;
 let localPlayerIndex = null;
 let unsubscribeFromGame = null;
 
+// Sabotage mechanic state
+// Set to false to disable sabotage for debugging
+const SABOTAGE_ENABLED = true;
+// Set to false to disable glow animation (static red dot instead)
+const SABOTAGE_ANIMATION_ENABLED = true;
+
+// Miss penalty state - when opponent taps wrong dot
+let missPenaltyActive = false;
+let missPenaltyEndTime = 0;
+const MISS_PENALTY_DURATION = 2000; // 2 seconds cooldown after a miss
+
+// Idle move reminder state
+let idleMoveReminderTimer = null;
+const IDLE_MOVE_REMINDER_DELAY = 10000; // 10 seconds
+
+let sabotageState = {
+  glowingDot: null,
+  glowStartTime: null,
+  glowDuration: null,
+  prohibitedDot: null,
+  prohibitedUntilPlayerIndex: null,
+  nextGlowTime: null
+};
+let glowExpiryTimer = null;
+let nextGlowTimer = null;
+
 /**
  * Initialize a game session
  * @param {string} gameId - The game ID to join
@@ -59,6 +85,10 @@ function handleGameStateUpdate(newState) {
       if (typeof showScreen === 'function') {
         showScreen('game');
       }
+      // Initialize sabotage when game starts (host triggers this)
+      if (SABOTAGE_ENABLED) {
+        FirebaseService.initializeSabotage(currentGameId);
+      }
     }
 
     // Check if game just ended
@@ -67,6 +97,24 @@ function handleGameStateUpdate(newState) {
         showGameOverFromState(gameState);
       }
     }
+
+    // Check if turn changed to a new player (for clearing prohibition)
+    if (oldState.currentPlayerIndex !== newState.currentPlayerIndex) {
+      handleTurnChange(oldState.currentPlayerIndex, newState.currentPlayerIndex);
+    }
+  } else {
+    // First state received - if game is already active but no sabotage data, initialize it
+    // This handles the case where a client joins/reconnects to an active game
+    if (SABOTAGE_ENABLED && newState.status === 'active' && !newState.sabotage) {
+      FirebaseService.initializeSabotage(currentGameId);
+    }
+  }
+
+  // Update sabotage state from Firebase
+  if (SABOTAGE_ENABLED && newState.sabotage) {
+    const oldSabotage = { ...sabotageState };
+    sabotageState = { ...newState.sabotage };
+    handleSabotageStateUpdate(oldSabotage);
   }
 
   console.log('Game state updated:', gameState);
@@ -369,9 +417,18 @@ async function handleLineDrawAttempt(row, col, direction) {
     return false;
   }
 
+  // Cancel any idle move reminder since player is making a move
+  cancelIdleMoveReminder();
+
   // Check if line already exists
   if (lineExists(row, col, direction)) {
     console.log('Line already exists');
+    return false;
+  }
+
+  // Check if line is prohibited by sabotage
+  if (isLineProhibited(row, col, direction)) {
+    console.log('Line is prohibited by sabotage');
     return false;
   }
 
@@ -460,6 +517,13 @@ async function handleLineDrawAttempt(row, col, direction) {
       // Visual feedback provided by pulsating canvas container
       updates[`players/${localPlayerIndex}/bankedTurns`] = currentBanked - 1;
       console.log('Using banked turn! Remaining:', currentBanked - 1);
+
+      // If this was the last banked turn, start idle move reminder
+      // Player still has one more move but bonus animation will stop
+      if (currentBanked - 1 === 0) {
+        // Use setTimeout to start after state update is processed
+        setTimeout(() => startIdleMoveReminder(), 100);
+      }
     } else {
       // No banked turns - advance to next player
       const nextPlayer = (gameState.currentPlayerIndex + 1) % gameState.playerCount;
@@ -525,6 +589,9 @@ function cleanupGameSession() {
     unsubscribeFromGame = null;
   }
 
+  // Cancel any pending timers
+  cancelIdleMoveReminder();
+
   gameState = null;
   currentGameId = null;
   localPlayerIndex = null;
@@ -569,6 +636,341 @@ function isPenaltySquare(key) {
   return gameState?.specialSquares?.penalty?.includes(key) || false;
 }
 
+// ============================================
+// SABOTAGE MECHANIC FUNCTIONS
+// ============================================
+
+/**
+ * Handle turn change - clear prohibition if it's the designated player's turn
+ * @param {number} oldPlayerIndex - Previous player index
+ * @param {number} newPlayerIndex - New player index
+ */
+function handleTurnChange(oldPlayerIndex, newPlayerIndex) {
+  // Cancel any idle move reminder when turn changes
+  cancelIdleMoveReminder();
+
+  // Check if prohibition should be lifted
+  if (sabotageState.prohibitedDot &&
+      sabotageState.prohibitedUntilPlayerIndex === newPlayerIndex) {
+    console.log('Turn changed to player', newPlayerIndex, '- clearing prohibition');
+    FirebaseService.clearProhibition(currentGameId);
+  }
+}
+
+/**
+ * Handle sabotage state updates from Firebase
+ * @param {object} oldSabotage - Previous sabotage state
+ */
+function handleSabotageStateUpdate(oldSabotage) {
+  try {
+
+    // Clear existing timers
+    if (glowExpiryTimer) {
+      clearTimeout(glowExpiryTimer);
+      glowExpiryTimer = null;
+    }
+    if (nextGlowTimer) {
+      clearTimeout(nextGlowTimer);
+      nextGlowTimer = null;
+    }
+
+    const isMyTurnNow = isMyTurn();
+
+  // If there's a glowing dot and it's NOT my turn, handle glow timer
+  // Only the "coordinator" (lowest non-active player index) manages the timer
+  if (sabotageState.glowingDot && !isMyTurnNow && !sabotageState.prohibitedDot) {
+
+    // Check if we're the coordinator for timer management
+    const activePlayerIndex = gameState?.currentPlayerIndex ?? 0;
+    const playerCount = gameState?.playerCount ?? 2;
+    let coordinatorIndex = -1;
+    for (let i = 0; i < playerCount; i++) {
+      if (i !== activePlayerIndex) {
+        coordinatorIndex = i;
+        break;
+      }
+    }
+
+    if (localPlayerIndex === coordinatorIndex) {
+      const now = Date.now();
+      const elapsed = now - (sabotageState.glowStartTime || now);
+      const originalRemaining = (sabotageState.glowDuration || 500) - elapsed;
+
+      // IMPORTANT: Even if the glow "expired" according to server time,
+      // give players a minimum window to see and tap it (accounts for network latency)
+      const MIN_GLOW_DISPLAY_TIME = 750; // ms - minimum time to show the glow
+      const remaining = Math.max(originalRemaining, MIN_GLOW_DISPLAY_TIME);
+
+      // Set timer to clear glow when it expires
+      glowExpiryTimer = setTimeout(() => {
+        // Only clear if the glow hasn't been tapped
+        if (sabotageState.glowingDot) {
+          FirebaseService.clearGlowAndScheduleNext(currentGameId);
+        }
+      }, remaining);
+    }
+  }
+
+  // If waiting for next glow and it's NOT my turn and no prohibition active
+  // Only the coordinator schedules the next glow cycle
+  const checkNextGlow = sabotageState.nextGlowTime && !sabotageState.glowingDot &&
+      !sabotageState.prohibitedDot && !isMyTurnNow;
+
+  if (checkNextGlow) {
+    // Check if we're the coordinator
+    const activePlayerIndex = gameState?.currentPlayerIndex ?? 0;
+    const playerCount = gameState?.playerCount ?? 2;
+    let coordinatorIndex = -1;
+    for (let i = 0; i < playerCount; i++) {
+      if (i !== activePlayerIndex) {
+        coordinatorIndex = i;
+        break;
+      }
+    }
+
+    if (localPlayerIndex === coordinatorIndex) {
+      const now = Date.now();
+      const waitTime = sabotageState.nextGlowTime - now;
+
+      if (waitTime > 0) {
+        nextGlowTimer = setTimeout(() => {
+          startNewGlowCycle();
+        }, waitTime);
+      } else {
+        // Time already passed, start immediately
+        startNewGlowCycle();
+      }
+    }
+  }
+
+    // Trigger board redraw to show/hide glowing dot and prohibition
+    if (typeof redraw === 'function') {
+      redraw();
+    }
+  } catch (error) {
+    console.error('[SABOTAGE] Error in handleSabotageStateUpdate:', error);
+  }
+}
+
+/**
+ * Start a new glow cycle with a random eligible dot
+ */
+function startNewGlowCycle() {
+  // Safety check - must have game ID
+  if (!currentGameId) return;
+
+  // Don't start if it's my turn or there's already a glow/prohibition
+  if (isMyTurn() || sabotageState.glowingDot || sabotageState.prohibitedDot) return;
+
+  // Only allow ONE opponent to start the glow cycle to prevent race conditions
+  // The "coordinator" is the opponent with the lowest player index
+  const activePlayerIndex = gameState?.currentPlayerIndex ?? 0;
+  const playerCount = gameState?.playerCount ?? 2;
+  let coordinatorIndex = -1;
+
+  // Find the lowest player index that isn't the active player
+  for (let i = 0; i < playerCount; i++) {
+    if (i !== activePlayerIndex) {
+      coordinatorIndex = i;
+      break;
+    }
+  }
+
+  if (localPlayerIndex !== coordinatorIndex) return;
+
+  const eligibleDots = getEligibleDotsForSabotage();
+  if (eligibleDots.length > 0) {
+    const randomDot = eligibleDots[Math.floor(Math.random() * eligibleDots.length)];
+    FirebaseService.startGlowCycle(currentGameId, randomDot);
+  }
+}
+
+/**
+ * Get dots that have at least one available line (eligible for sabotage)
+ * @returns {string[]} Array of dot keys "row,col"
+ */
+function getEligibleDotsForSabotage() {
+  if (!gameState) return [];
+
+  const eligible = [];
+  const gridSize = gameState.gridSize || 6;
+
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      if (dotHasAvailableLine(row, col)) {
+        eligible.push(`${row},${col}`);
+      }
+    }
+  }
+  return eligible;
+}
+
+/**
+ * Check if a dot has at least one available (undrawn) line
+ * @param {number} row - Dot row
+ * @param {number} col - Dot column
+ * @returns {boolean}
+ */
+function dotHasAvailableLine(row, col) {
+  const gridSize = gameState?.gridSize || 6;
+  const lines = gameState?.lines || {};
+
+  // Check all 4 possible lines from this dot
+  // Right (horizontal from this dot)
+  if (col < gridSize - 1 && lines[`${row},${col},h`] === undefined) return true;
+  // Down (vertical from this dot)
+  if (row < gridSize - 1 && lines[`${row},${col},v`] === undefined) return true;
+  // Left (horizontal from left neighbor to this dot)
+  if (col > 0 && lines[`${row},${col - 1},h`] === undefined) return true;
+  // Up (vertical from top neighbor to this dot)
+  if (row > 0 && lines[`${row - 1},${col},v`] === undefined) return true;
+
+  return false;
+}
+
+/**
+ * Check if a line is prohibited (touches the prohibited dot)
+ * @param {number} row - Line row
+ * @param {number} col - Line column
+ * @param {string} direction - 'h' or 'v'
+ * @returns {boolean}
+ */
+function isLineProhibited(row, col, direction) {
+  if (!sabotageState.prohibitedDot) return false;
+
+  const [pRow, pCol] = sabotageState.prohibitedDot.split(',').map(Number);
+
+  if (direction === 'h') {
+    // Horizontal line from (row, col) to (row, col+1)
+    if ((row === pRow && col === pCol) || (row === pRow && col + 1 === pCol)) {
+      return true;
+    }
+  } else {
+    // Vertical line from (row, col) to (row+1, col)
+    if ((row === pRow && col === pCol) || (row + 1 === pRow && col === pCol)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Handle opponent tapping the glowing dot
+ * @param {string} dotKey - The dot that was tapped "row,col"
+ */
+async function handleGlowingDotTap(dotKey) {
+  // Validate this is the glowing dot
+  if (sabotageState.glowingDot !== dotKey) {
+    console.log('Tapped dot is not the glowing dot');
+    return;
+  }
+
+  // Can't tap if it's my turn
+  if (isMyTurn()) {
+    console.log('Cannot tap glowing dot on your own turn');
+    return;
+  }
+
+  // Calculate next player index (the one after current player)
+  const currentPlayer = gameState.currentPlayerIndex;
+  const nextPlayer = (currentPlayer + 1) % gameState.playerCount;
+
+  // Get tapping player's user ID
+  const user = FirebaseService.getUser();
+  const tappingPlayerId = user ? user.uid : 'unknown';
+
+  console.log('Tapping glowing dot:', dotKey);
+  await FirebaseService.tapGlowingDot(currentGameId, dotKey, tappingPlayerId, nextPlayer);
+}
+
+/**
+ * Get current sabotage state for rendering
+ * @returns {object}
+ */
+function getSabotageState() {
+  if (!SABOTAGE_ENABLED) return null;
+  return sabotageState;
+}
+
+function isSabotageAnimationEnabled() {
+  return SABOTAGE_ANIMATION_ENABLED;
+}
+
+/**
+ * Trigger a miss penalty when opponent taps wrong dot
+ */
+function triggerMissPenalty() {
+  missPenaltyActive = true;
+  missPenaltyEndTime = Date.now() + MISS_PENALTY_DURATION;
+  console.log('[SABOTAGE] Miss penalty triggered, expires in', MISS_PENALTY_DURATION, 'ms');
+}
+
+/**
+ * Check if miss penalty is currently active
+ * @returns {boolean}
+ */
+function isMissPenaltyActive() {
+  if (!missPenaltyActive) return false;
+
+  // Check if penalty has expired
+  if (Date.now() >= missPenaltyEndTime) {
+    missPenaltyActive = false;
+    console.log('[SABOTAGE] Miss penalty expired');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Get the miss penalty slowdown factor (1.0 = normal, 0.1 = 90% slower)
+ * @returns {number}
+ */
+function getMissPenaltySlowdown() {
+  return isMissPenaltyActive() ? 0.1 : 1.0;
+}
+
+// ============================================
+// IDLE MOVE REMINDER FUNCTIONS
+// ============================================
+
+/**
+ * Start the idle move reminder timer
+ * Called when bonus animation stops but player still has a move
+ */
+function startIdleMoveReminder() {
+  // Cancel any existing timer
+  cancelIdleMoveReminder();
+
+  // Only start if it's our turn
+  if (!isMyTurn()) return;
+
+  console.log('[IDLE] Starting 10-second idle move reminder timer');
+
+  idleMoveReminderTimer = setTimeout(() => {
+    // Double-check it's still our turn
+    if (isMyTurn()) {
+      console.log('[IDLE] Showing idle move reminder');
+      if (typeof showNotification === 'function') {
+        // Use persistent notification (true = dismiss on tap/click)
+        showNotification('You still have a move.', true);
+      }
+    }
+    idleMoveReminderTimer = null;
+  }, IDLE_MOVE_REMINDER_DELAY);
+}
+
+/**
+ * Cancel the idle move reminder timer
+ * Called when player makes a move or turn changes
+ */
+function cancelIdleMoveReminder() {
+  if (idleMoveReminderTimer) {
+    console.log('[IDLE] Cancelling idle move reminder timer');
+    clearTimeout(idleMoveReminderTimer);
+    idleMoveReminderTimer = null;
+  }
+}
+
 // Export for use in other modules
 window.GameService = {
   // Session management
@@ -595,5 +997,14 @@ window.GameService = {
 
   // Key helpers
   getLineKey: getLineKey,
-  getBoxKey: getBoxKey
+  getBoxKey: getBoxKey,
+
+  // Sabotage mechanic
+  getSabotageState: getSabotageState,
+  isLineProhibited: isLineProhibited,
+  handleGlowingDotTap: handleGlowingDotTap,
+  isSabotageAnimationEnabled: isSabotageAnimationEnabled,
+  triggerMissPenalty: triggerMissPenalty,
+  isMissPenaltyActive: isMissPenaltyActive,
+  getMissPenaltySlowdown: getMissPenaltySlowdown
 };
