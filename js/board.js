@@ -476,6 +476,37 @@ function tryPlaceLine(dot1, dot2) {
         return false;
     }
 
+    // Check if we're in multiplayer mode (GameService exists and has active game)
+    if (typeof GameService !== 'undefined' && GameService.getState && GameService.getState()) {
+        // Check if it's our turn first
+        if (!GameService.isMyTurn()) {
+            console.log('Not your turn!');
+            // Clear input state but don't send move
+            clearInputState();
+            redraw();
+            return false;
+        }
+
+        // Multiplayer mode - delegate to GameService
+        // Clear input state first for visual feedback
+        clearInputState();
+        redraw();
+
+        // Send move to Firebase (async, state will update via subscription)
+        GameService.handleLineDrawAttempt(line.row, line.col, line.direction)
+            .then(success => {
+                if (!success) {
+                    console.log('Move rejected by GameService');
+                }
+            })
+            .catch(err => {
+                console.error('Error sending move:', err);
+            });
+
+        return true; // Return true to indicate attempt was made
+    }
+
+    // Single-player/local mode - handle locally
     // Place the line
     addLine(line.row, line.col, line.direction, currentPlayer);
 
@@ -781,6 +812,12 @@ function getNearestLine(x, y) {
  * @returns {boolean} True if line is owned
  */
 function isLineOwned(line) {
+    // Check against Firebase state if in multiplayer mode
+    if (typeof GameService !== 'undefined' && GameService.lineExists) {
+        return GameService.lineExists(line.row, line.col, line.direction);
+    }
+
+    // Fallback to local state
     return lines.some(l =>
         l.row === line.row &&
         l.col === line.col &&
@@ -1007,4 +1044,124 @@ function showGameOver() {
     }
 
     console.log('Game Over!', result);
+}
+
+// ============================================================================
+// MULTIPLAYER SYNC FUNCTIONS (Called by game.js)
+// ============================================================================
+
+/**
+ * Update board state from Firebase game state
+ * Called when game state updates come from Firebase
+ * @param {object} gameState - The game state from Firebase
+ */
+function updateBoardFromGameState(gameState) {
+    if (!gameState) return;
+
+    // Update lines array from game state
+    lines.length = 0;
+    if (gameState.linesArray) {
+        gameState.linesArray.forEach(line => {
+            lines.push({
+                row: line.row,
+                col: line.col,
+                direction: line.direction,
+                ownerId: line.ownerId
+            });
+        });
+    }
+
+    // Update boxes array from game state
+    boxes.length = 0;
+    if (gameState.boxesArray) {
+        gameState.boxesArray.forEach(box => {
+            boxes.push({
+                row: box.row,
+                col: box.col,
+                ownerId: box.ownerId,
+                type: box.type
+            });
+        });
+    }
+
+    // Update current player
+    if (gameState.currentPlayerIndex !== undefined) {
+        currentPlayer = gameState.currentPlayerIndex;
+    }
+
+    // Update players array
+    if (gameState.playersArray) {
+        players.length = 0;
+        gameState.playersArray.forEach((player, index) => {
+            players.push({
+                id: index,
+                name: player.name,
+                color: player.color,
+                score: player.score || 0,
+                bankedTurns: player.bankedTurns || 0
+            });
+        });
+    }
+
+    // Redraw the board with updated state
+    redraw();
+
+    console.log('Board updated from game state:', {
+        lines: lines.length,
+        boxes: boxes.length,
+        currentPlayer,
+        players: players.length
+    });
+}
+
+/**
+ * Update scoreboard from Firebase game state
+ * Called when game state updates come from Firebase
+ * @param {object} gameState - The game state from Firebase
+ */
+function updateScoreboardFromState(gameState) {
+    if (!gameState || !gameState.playersArray) return;
+
+    // Update local players array scores
+    gameState.playersArray.forEach((player, index) => {
+        if (players[index]) {
+            players[index].score = player.score || 0;
+            players[index].name = player.name;
+            players[index].bankedTurns = player.bankedTurns || 0;
+        }
+    });
+
+    // Update current player index
+    if (gameState.currentPlayerIndex !== undefined) {
+        currentPlayer = gameState.currentPlayerIndex;
+    }
+
+    // Refresh the scoreboard UI
+    updateScoreboard();
+}
+
+/**
+ * Show game over screen with state from Firebase
+ * Called when game transitions to 'finished' status
+ * @param {object} gameState - The game state from Firebase
+ */
+function showGameOverFromState(gameState) {
+    if (!gameState || !gameState.playersArray) {
+        showGameOver(); // Fallback to local state
+        return;
+    }
+
+    // Update local players with final scores from Firebase
+    players.length = 0;
+    gameState.playersArray.forEach((player, index) => {
+        players.push({
+            id: index,
+            name: player.name,
+            color: player.color,
+            score: player.score || 0
+        });
+    });
+
+    // Use the standard game over display
+    showGameOver();
 }
