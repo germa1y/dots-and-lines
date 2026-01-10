@@ -32,7 +32,7 @@ let gridOffsetY; // Y offset to center the grid
 let lines = []; // Array of line objects: { row, col, direction, ownerId }
 let boxes = []; // Array of box objects: { row, col, ownerId }
 let currentPlayer = 0; // Current player index (for testing, will come from backend)
-const PLAYER_COLORS = ['#FF6B6B', '#4ECDC4', '#FFE66D', '#A8E6CF']; // Matches CSS vars
+// PLAYER_COLORS defined in firebase.js
 
 // Enhanced input state
 let activeDot = null; // Currently activated dot: { row, col } or null
