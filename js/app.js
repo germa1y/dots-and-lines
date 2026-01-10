@@ -4,8 +4,18 @@
  */
 
 // Wait for DOM to be ready
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     console.log('Dots and Lines - App initialized');
+
+    // Initialize lobby (Firebase + Auth)
+    if (typeof LobbyService !== 'undefined') {
+        const success = await LobbyService.init();
+        if (success) {
+            console.log('Firebase and Auth ready');
+        } else {
+            console.error('Failed to initialize Firebase/Auth');
+        }
+    }
 
     // Show menu screen (landing page)
     showScreen('menu');
@@ -25,8 +35,6 @@ document.addEventListener('DOMContentLoaded', function() {
     } else {
         console.error('initCanvas function not found - board.js may not be loaded');
     }
-
-    // TODO: Initialize Firebase (TASK-002, handled by Ember)
 });
 
 /**
@@ -53,7 +61,7 @@ function setupMenuScreen() {
 
     // Create Game button
     if (createGameBtn) {
-        createGameBtn.addEventListener('click', function() {
+        createGameBtn.addEventListener('click', async function() {
             const playerName = playerNameInput ? playerNameInput.value.trim() : '';
 
             if (!playerName) {
@@ -61,16 +69,35 @@ function setupMenuScreen() {
                 return;
             }
 
+            // Disable button during operation
+            createGameBtn.disabled = true;
+            createGameBtn.textContent = 'Creating...';
+
             console.log('Create game clicked:', playerName);
-            // TODO: Call Firebase function to create game (Ember's task)
-            // For now, show game screen for testing
-            showScreen('game');
+
+            // Create game via LobbyService
+            if (typeof LobbyService !== 'undefined') {
+                const result = await LobbyService.createGame(playerName, 4);
+                if (result.success) {
+                    console.log('Game created:', result.code);
+                    showScreen('lobby');
+                } else {
+                    alert('Failed to create game: ' + (result.error || 'Unknown error'));
+                }
+            } else {
+                // Fallback for testing
+                showScreen('lobby');
+            }
+
+            // Re-enable button
+            createGameBtn.disabled = false;
+            createGameBtn.textContent = 'Create Game';
         });
     }
 
     // Join Game button
     if (joinGameBtn) {
-        joinGameBtn.addEventListener('click', function() {
+        joinGameBtn.addEventListener('click', async function() {
             const playerName = playerNameInput ? playerNameInput.value.trim() : '';
             const gameCode = gameCodeInput ? gameCodeInput.value.trim().toUpperCase() : '';
 
@@ -84,8 +111,26 @@ function setupMenuScreen() {
                 return;
             }
 
+            // Disable button during operation
+            joinGameBtn.disabled = true;
+            joinGameBtn.textContent = 'Joining...';
+
             console.log('Join game clicked:', { playerName, gameCode });
-            // TODO: Call Firebase function to join game (Ember's task)
+
+            // Join game via LobbyService
+            if (typeof LobbyService !== 'undefined') {
+                const result = await LobbyService.joinGame(gameCode, playerName);
+                if (result.success) {
+                    console.log('Joined game:', result.gameId);
+                    showScreen('lobby');
+                } else {
+                    alert('Failed to join game: ' + (result.error || 'Unknown error'));
+                }
+            }
+
+            // Re-enable button
+            joinGameBtn.disabled = false;
+            joinGameBtn.textContent = 'Join Game';
         });
     }
 
@@ -133,19 +178,42 @@ function setupLobbyScreen() {
 
     // Start Game button (host only)
     if (startGameBtn) {
-        startGameBtn.addEventListener('click', function() {
+        startGameBtn.addEventListener('click', async function() {
             console.log('Start game clicked');
-            // TODO: Call Firebase function to start game (Ember's task)
-            // For now, show game screen for testing
-            showScreen('game');
+
+            // Disable button during operation
+            startGameBtn.disabled = true;
+            startGameBtn.textContent = 'Starting...';
+
+            // Start game via LobbyService
+            if (typeof LobbyService !== 'undefined') {
+                const result = await LobbyService.startGame();
+                if (!result.success) {
+                    alert('Failed to start game: ' + (result.error || 'Unknown error'));
+                    // Re-enable button on failure
+                    startGameBtn.disabled = false;
+                    startGameBtn.textContent = 'Start Game';
+                }
+                // On success, the lobby update handler will transition to game screen
+            } else {
+                // Fallback for testing
+                showScreen('game');
+                startGameBtn.disabled = false;
+                startGameBtn.textContent = 'Start Game';
+            }
         });
     }
 
     // Leave Lobby button
     if (leaveLobbyBtn) {
-        leaveLobbyBtn.addEventListener('click', function() {
+        leaveLobbyBtn.addEventListener('click', async function() {
             console.log('Leave lobby clicked');
-            // TODO: Call Firebase function to leave lobby (Ember's task)
+
+            // Leave lobby via LobbyService
+            if (typeof LobbyService !== 'undefined') {
+                await LobbyService.leaveLobby();
+            }
+
             showScreen('menu');
         });
     }
@@ -162,9 +230,14 @@ function setupGameOverScreen() {
     if (playAgainBtn) {
         playAgainBtn.addEventListener('click', function() {
             console.log('Play again clicked');
-            // Reset game state and start a new game
+            // Clean up current game session
+            if (typeof GameService !== 'undefined') {
+                GameService.cleanup();
+            }
+            // Reset local game state
             resetGameState();
-            showScreen('game');
+            // Go back to lobby to start a new game
+            showScreen('menu');
         });
     }
 
@@ -172,7 +245,11 @@ function setupGameOverScreen() {
     if (backToMenuBtn) {
         backToMenuBtn.addEventListener('click', function() {
             console.log('Back to menu clicked');
-            // Reset game state and return to menu
+            // Clean up current game session
+            if (typeof GameService !== 'undefined') {
+                GameService.cleanup();
+            }
+            // Reset local game state
             resetGameState();
             showScreen('menu');
         });
