@@ -33,22 +33,22 @@ Acceptance criteria:
 ### TASK-045: Configure Firebase Hosting
 - **Priority**: P0
 - **Source**: openspec/TASK-045
-- **Status**: pending
+- **Status**: complete
 
 Acceptance criteria:
-- [ ] Create firebase.json with hosting config
-- [ ] Set public directory
-- [ ] Configure SPA rewrites if needed
+- [x] Create firebase.json with hosting config
+- [x] Set public directory
+- [x] Configure SPA rewrites if needed
 
 ### TASK-046: Deploy to Firebase Hosting
 - **Priority**: P0
 - **Source**: openspec/TASK-046
-- **Status**: pending
+- **Status**: complete
 
 Acceptance criteria:
-- [ ] Run firebase deploy --only hosting
-- [ ] Verify deployment successful
-- [ ] Note the public URL
+- [x] Run firebase deploy --only hosting
+- [x] Verify deployment successful
+- [x] Note the public URL: https://dots-and-lines-game.web.app
 
 ### TASK-047: Test on iPhone Safari
 - **Priority**: P0
@@ -96,13 +96,14 @@ Acceptance criteria:
 
 ## Phase 11: Security & Cleanup
 
-### TASK-079: Write Firestore security rules
+### TASK-079: Write Realtime Database security rules
 - **Priority**: P1
 - **Source**: openspec/TASK-079
-- **Status**: pending
+- **Status**: partial
+- **Notes**: Basic rules in database.rules.json (auth required). Advanced validation pending.
 
 Acceptance criteria:
-- [ ] Only authenticated users can read/write
+- [x] Only authenticated users can read/write
 - [ ] Players can only modify their games
 - [ ] Validate move is legal
 - [ ] Prevent score manipulation
@@ -158,7 +159,8 @@ Acceptance criteria:
 
 | Status | Count |
 |--------|-------|
-| Pending | 11 |
+| Pending | 8 |
 | In Progress | 0 |
-| Complete | 1 |
+| Complete | 3 |
+| Partial | 1 |
 | Blocked | 0 |
