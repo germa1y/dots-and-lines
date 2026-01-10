@@ -169,6 +169,47 @@ Acceptance criteria:
 
 ---
 
+## Phase 6: Enhanced Input Mechanics (NEW)
+
+### TASK-EI-001: Implement single-click dot activation
+- **Priority**: P0
+- **Source**: agents/context.md (Enhanced Input Mechanics)
+- **Status**: completed
+- **Completed**: 2026-01-09 by Pixel
+
+Acceptance criteria:
+- [x] First click/tap on dot ACTIVATES it
+- [x] Activated dot shows pulsating animation with player color
+- [x] Second click on ADJACENT dot completes the line
+- [x] Invalid clicks (non-adjacent, already connected) handled gracefully
+- [x] Tapping empty space deactivates current selection
+- [x] Tapping non-adjacent dot switches activation to new dot
+
+### TASK-EI-002: Implement drag-and-drop line drawing
+- **Priority**: P0
+- **Source**: agents/context.md (Enhanced Input Mechanics)
+- **Status**: completed
+- **Completed**: 2026-01-09 by Pixel
+
+Acceptance criteria:
+- [x] Detect drag start when pointer moves beyond threshold from dot
+- [x] Line follows touch/cursor position during drag
+- [x] Line SNAPS to legal connecting dot when close enough (SNAP_DISTANCE)
+- [x] Visual feedback: solid line when snapped, dashed semi-transparent when not
+- [x] Release completes line if snapped to valid adjacent dot
+- [x] Release without valid snap cancels action
+- [x] Works for both mouse and touch input
+
+### TASK-EI-003: Add visual feedback CSS
+- **Priority**: P0
+- **Source**: manual
+- **Status**: completed
+- **Completed**: 2026-01-09 by Pixel
+
+Acceptance criteria:
+- [x] Prevent text selection during drag
+- [x] Cursor changes to grabbing during drag
+- [x] Canvas touch-action set to none for smooth mobile dragging
 
 ---
 
@@ -188,7 +229,7 @@ Acceptance criteria:
 
 | Status | Count |
 |--------|-------|
-| Pending | 0 |
+| Pending | 1 |
 | In Progress | 0 |
-| Complete | 14 |
+| Complete | 17 |
 | Blocked | 0 |

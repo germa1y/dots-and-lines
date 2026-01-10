@@ -97,6 +97,20 @@ body {
     max-height: 60vh;
     touch-action: none;
     cursor: pointer;
+    /* Prevent text selection during drag */
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+/* Drag cursor feedback */
+#game-canvas.dragging {
+    cursor: grabbing;
+}
+
+#game-canvas:active {
+    cursor: grabbing;
 }
 
 /* ========================================

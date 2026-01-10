@@ -1,6 +1,10 @@
 /**
  * board.js - Canvas rendering and game board visualization
  * Handles canvas setup, scaling, grid rendering, and user interactions
+ *
+ * Enhanced Input Mechanics:
+ * - Single-click: First click ACTIVATES dot (pulsating), second click on adjacent dot completes line
+ * - Drag & drop: Drag from dot, line follows cursor, snaps to legal connecting dot
  */
 
 // Canvas and context
@@ -15,7 +19,9 @@ let canvasHeight;
 // Game constants
 const GRID_SIZE = 6; // 5 boxes = 6 dots per side
 const DOT_RADIUS = 6; // Radius of dots in pixels
+const DOT_RADIUS_ACTIVE = 10; // Larger radius for activated dot
 const LINE_WIDTH = 4; // Width of lines in pixels
+const SNAP_DISTANCE = 30; // Distance threshold for snapping to a dot during drag
 
 // Grid layout variables (calculated on resize)
 let gridSpacing; // Distance between dots
@@ -27,6 +33,17 @@ let lines = []; // Array of line objects: { row, col, direction, ownerId }
 let boxes = []; // Array of box objects: { row, col, ownerId }
 let currentPlayer = 0; // Current player index (for testing, will come from backend)
 const PLAYER_COLORS = ['#FF6B6B', '#4ECDC4', '#FFE66D', '#A8E6CF']; // Matches CSS vars
+
+// Enhanced input state
+let activeDot = null; // Currently activated dot: { row, col } or null
+let isDragging = false; // Whether we're in drag mode
+let dragStartDot = null; // Dot where drag started: { row, col }
+let dragCurrentPos = null; // Current drag position: { x, y } in canvas coords
+let dragSnapDot = null; // Dot we're snapping to: { row, col } or null
+
+// Animation state
+let animationFrameId = null; // For pulsating animation
+let pulsePhase = 0; // Animation phase for pulsating effect
 
 // Players (for testing, will come from backend)
 let players = [
@@ -66,17 +83,21 @@ function initCanvas() {
 }
 
 /**
- * Set up touch and mouse event listeners
+ * Set up touch and mouse event listeners for enhanced input
+ * Supports both single-click (tap) and drag-and-drop modes
  */
 function setupInputListeners() {
-    // Mouse events
-    canvas.addEventListener('click', handleCanvasClick);
+    // Mouse events for drag-and-drop
+    canvas.addEventListener('mousedown', handlePointerDown);
+    canvas.addEventListener('mousemove', handlePointerMove);
+    canvas.addEventListener('mouseup', handlePointerUp);
+    canvas.addEventListener('mouseleave', handlePointerCancel);
 
-    // Touch events (prevent default to avoid double-firing with click)
-    canvas.addEventListener('touchstart', handleTouchStart);
-    canvas.addEventListener('touchend', function(e) {
-        e.preventDefault(); // Prevent mouse events from firing
-    });
+    // Touch events for mobile drag-and-drop
+    canvas.addEventListener('touchstart', handleTouchStartEnhanced, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMoveEnhanced, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEndEnhanced, { passive: false });
+    canvas.addEventListener('touchcancel', handlePointerCancel);
 }
 
 /**
@@ -162,26 +183,61 @@ function clearCanvas() {
 function redraw() {
     clearCanvas();
 
-    // Draw game elements in order (boxes behind lines)
-    drawDots(); // Grid dots
-    drawBoxes(); // Filled boxes
+    // Draw game elements in order (boxes behind lines, then drag preview)
+    drawBoxes(); // Filled boxes (behind everything)
     drawLines(); // Lines drawn by players
+    drawDragPreview(); // Preview line during drag
+    drawDots(); // Grid dots (on top so they're clickable)
 }
 
 /**
  * Draw all dots on the grid
+ * Activated dot gets pulsating animation effect
  */
 function drawDots() {
-    ctx.fillStyle = getComputedStyle(document.documentElement)
+    const defaultColor = getComputedStyle(document.documentElement)
         .getPropertyValue('--dot-color').trim() || '#FFFFFF';
+    const playerColor = PLAYER_COLORS[currentPlayer] || '#FFFFFF';
 
     for (let row = 0; row < GRID_SIZE; row++) {
         for (let col = 0; col < GRID_SIZE; col++) {
             const pos = getDotPosition(row, col);
+            const isActive = activeDot && activeDot.row === row && activeDot.col === col;
+            const isDragStart = dragStartDot && dragStartDot.row === row && dragStartDot.col === col;
+            const isSnapTarget = dragSnapDot && dragSnapDot.row === row && dragSnapDot.col === col;
 
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, DOT_RADIUS, 0, Math.PI * 2);
-            ctx.fill();
+            // Draw dot with different styles based on state
+            if (isActive || isDragStart) {
+                // Pulsating active dot
+                const pulseScale = 1 + 0.3 * Math.sin(pulsePhase);
+                const radius = DOT_RADIUS_ACTIVE * pulseScale;
+
+                // Draw glow effect
+                ctx.save();
+                ctx.shadowColor = playerColor;
+                ctx.shadowBlur = 15;
+                ctx.fillStyle = playerColor;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            } else if (isSnapTarget) {
+                // Highlighted snap target
+                ctx.save();
+                ctx.shadowColor = playerColor;
+                ctx.shadowBlur = 10;
+                ctx.fillStyle = playerColor + 'AA'; // Semi-transparent
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, DOT_RADIUS_ACTIVE * 0.9, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            } else {
+                // Normal dot
+                ctx.fillStyle = defaultColor;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, DOT_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 }
@@ -234,6 +290,37 @@ function drawLines() {
 }
 
 /**
+ * Draw the drag preview line during drag-and-drop
+ */
+function drawDragPreview() {
+    if (!isDragging || !dragStartDot || !dragCurrentPos) return;
+
+    const startPos = getDotPosition(dragStartDot.row, dragStartDot.col);
+    const playerColor = PLAYER_COLORS[currentPlayer] || '#FFFFFF';
+
+    // Determine end position: snap to dot if available, otherwise follow cursor
+    let endPos;
+    if (dragSnapDot) {
+        endPos = getDotPosition(dragSnapDot.row, dragSnapDot.col);
+    } else {
+        endPos = dragCurrentPos;
+    }
+
+    // Draw the preview line
+    ctx.save();
+    ctx.lineWidth = LINE_WIDTH;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = dragSnapDot ? playerColor : playerColor + '80'; // Semi-transparent if not snapped
+    ctx.setLineDash(dragSnapDot ? [] : [8, 4]); // Dashed if not snapped
+
+    ctx.beginPath();
+    ctx.moveTo(startPos.x, startPos.y);
+    ctx.lineTo(endPos.x, endPos.y);
+    ctx.stroke();
+    ctx.restore();
+}
+
+/**
  * Get canvas dimensions
  * @returns {{width: number, height: number}} Canvas dimensions in CSS pixels
  */
@@ -271,74 +358,360 @@ function getDotPosition(row, col) {
     };
 }
 
+// ============================================================================
+// ENHANCED INPUT HANDLERS (Single-click activation + Drag-and-drop)
+// ============================================================================
+
 /**
- * Handle mouse click on canvas
- * @param {MouseEvent} e - Mouse event
+ * Get the nearest dot to a canvas coordinate
+ * @param {number} x - X coordinate on canvas
+ * @param {number} y - Y coordinate on canvas
+ * @param {number} tolerance - Maximum distance to consider a dot "near"
+ * @returns {{row: number, col: number}|null} Dot position or null
  */
-function handleCanvasClick(e) {
-    const coords = screenToCanvasCoords(e.clientX, e.clientY);
-    handleTap(coords.x, coords.y);
+function getNearestDot(x, y, tolerance = 25) {
+    let nearestDot = null;
+    let nearestDistance = tolerance;
+
+    for (let row = 0; row < GRID_SIZE; row++) {
+        for (let col = 0; col < GRID_SIZE; col++) {
+            const pos = getDotPosition(row, col);
+            const distance = Math.sqrt(Math.pow(x - pos.x, 2) + Math.pow(y - pos.y, 2));
+
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestDot = { row, col };
+            }
+        }
+    }
+
+    return nearestDot;
 }
 
 /**
- * Handle touch start on canvas
- * @param {TouchEvent} e - Touch event
+ * Check if two dots are adjacent (horizontally or vertically)
+ * @param {{row: number, col: number}} dot1
+ * @param {{row: number, col: number}} dot2
+ * @returns {boolean}
  */
-function handleTouchStart(e) {
-    e.preventDefault();
-    if (e.touches.length > 0) {
-        const touch = e.touches[0];
-        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
-        handleTap(coords.x, coords.y);
+function areDotsAdjacent(dot1, dot2) {
+    const rowDiff = Math.abs(dot1.row - dot2.row);
+    const colDiff = Math.abs(dot1.col - dot2.col);
+    // Adjacent if exactly one step horizontally OR vertically (not diagonal)
+    return (rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1);
+}
+
+/**
+ * Get line definition from two adjacent dots
+ * @param {{row: number, col: number}} dot1
+ * @param {{row: number, col: number}} dot2
+ * @returns {{row: number, col: number, direction: string}|null}
+ */
+function getLineFromDots(dot1, dot2) {
+    if (!areDotsAdjacent(dot1, dot2)) return null;
+
+    if (dot1.row === dot2.row) {
+        // Horizontal line
+        const col = Math.min(dot1.col, dot2.col);
+        return { row: dot1.row, col, direction: 'h' };
+    } else {
+        // Vertical line
+        const row = Math.min(dot1.row, dot2.row);
+        return { row, col: dot1.col, direction: 'v' };
     }
 }
 
 /**
- * Handle tap/click at canvas coordinates
- * @param {number} x - X coordinate on canvas
- * @param {number} y - Y coordinate on canvas
+ * Start the pulsating animation for active dot
  */
-function handleTap(x, y) {
-    const line = getNearestLine(x, y);
+function startPulseAnimation() {
+    if (animationFrameId) return; // Already running
 
-    if (line) {
-        // Check if line is already owned
-        if (isLineOwned(line)) {
-            console.log('Line already owned');
-            return;
-        }
-
-        // Mark line as owned by current player
-        addLine(line.row, line.col, line.direction, currentPlayer);
-
-        // Check for completed boxes
-        const completedBoxes = checkAndCompleteBoxes(line, currentPlayer);
-
-        // Update scores if boxes were completed
-        if (completedBoxes > 0) {
-            calculateScores();
-            updateScoreboard();
-        }
-
-        // Redraw board immediately for visual feedback
+    function animate() {
+        pulsePhase += 0.15; // Animation speed
         redraw();
+        animationFrameId = requestAnimationFrame(animate);
+    }
+    animate();
+}
 
-        // Check if game is over
-        if (isGameOver()) {
-            showGameOver();
-            return;
+/**
+ * Stop the pulsating animation
+ */
+function stopPulseAnimation() {
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+    pulsePhase = 0;
+}
+
+/**
+ * Clear all enhanced input state
+ */
+function clearInputState() {
+    activeDot = null;
+    isDragging = false;
+    dragStartDot = null;
+    dragCurrentPos = null;
+    dragSnapDot = null;
+    stopPulseAnimation();
+}
+
+/**
+ * Try to place a line between two dots and handle game logic
+ * @param {{row: number, col: number}} dot1
+ * @param {{row: number, col: number}} dot2
+ * @returns {boolean} True if line was successfully placed
+ */
+function tryPlaceLine(dot1, dot2) {
+    const line = getLineFromDots(dot1, dot2);
+    if (!line) {
+        console.log('Dots are not adjacent');
+        return false;
+    }
+
+    if (isLineOwned(line)) {
+        console.log('Line already owned');
+        return false;
+    }
+
+    // Place the line
+    addLine(line.row, line.col, line.direction, currentPlayer);
+
+    // Check for completed boxes
+    const completedBoxes = checkAndCompleteBoxes(line, currentPlayer);
+
+    // Update scores if boxes were completed
+    if (completedBoxes > 0) {
+        calculateScores();
+        updateScoreboard();
+    }
+
+    // Clear input state
+    clearInputState();
+
+    // Redraw board
+    redraw();
+
+    // Check if game is over
+    if (isGameOver()) {
+        showGameOver();
+        return true;
+    }
+
+    // If no boxes were completed, switch to next player
+    if (completedBoxes === 0) {
+        currentPlayer = (currentPlayer + 1) % players.length;
+        updateScoreboard();
+    }
+
+    console.log('Line placed:', line, 'Boxes completed:', completedBoxes, 'Current player:', currentPlayer);
+    return true;
+}
+
+// Track pointer state for distinguishing click from drag
+let pointerDownTime = 0;
+let pointerDownPos = null;
+const DRAG_THRESHOLD = 10; // Minimum pixels to consider it a drag
+const CLICK_TIMEOUT = 200; // Max ms for a quick tap
+
+/**
+ * Handle pointer down (mouse or touch start)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ */
+function handlePointerDownAt(x, y) {
+    pointerDownTime = Date.now();
+    pointerDownPos = { x, y };
+
+    const dot = getNearestDot(x, y);
+
+    if (dot) {
+        // Start potential drag from this dot
+        dragStartDot = dot;
+        dragCurrentPos = { x, y };
+        // Don't set isDragging yet - wait to see if user moves
+    }
+}
+
+/**
+ * Handle pointer move (mouse move or touch move)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ */
+function handlePointerMoveAt(x, y) {
+    if (!dragStartDot) return;
+
+    const dx = x - pointerDownPos.x;
+    const dy = y - pointerDownPos.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // If moved beyond threshold, enter drag mode
+    if (distance > DRAG_THRESHOLD && !isDragging) {
+        isDragging = true;
+        activeDot = null; // Cancel click mode if we were in it
+        startPulseAnimation();
+        console.log('Drag mode started');
+    }
+
+    if (isDragging) {
+        dragCurrentPos = { x, y };
+
+        // Check for snap to adjacent dot
+        const nearDot = getNearestDot(x, y, SNAP_DISTANCE);
+        if (nearDot && areDotsAdjacent(dragStartDot, nearDot)) {
+            // Check if line already exists
+            const potentialLine = getLineFromDots(dragStartDot, nearDot);
+            if (potentialLine && !isLineOwned(potentialLine)) {
+                dragSnapDot = nearDot;
+            } else {
+                dragSnapDot = null;
+            }
+        } else {
+            dragSnapDot = null;
         }
 
-        // If no boxes were completed, switch to next player
-        // If boxes were completed, current player gets another turn
-        if (completedBoxes === 0) {
-            currentPlayer = (currentPlayer + 1) % 2;
-            updateScoreboard(); // Update to highlight next player
-        }
+        redraw();
+    }
+}
 
-        console.log('Line added:', line, 'Boxes completed:', completedBoxes, 'Next player:', currentPlayer);
+/**
+ * Handle pointer up (mouse up or touch end)
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ */
+function handlePointerUpAt(x, y) {
+    const wasQuickTap = (Date.now() - pointerDownTime) < CLICK_TIMEOUT;
+    const movedDistance = pointerDownPos ?
+        Math.sqrt(Math.pow(x - pointerDownPos.x, 2) + Math.pow(y - pointerDownPos.y, 2)) : 0;
+
+    if (isDragging) {
+        // Complete drag operation
+        if (dragSnapDot && dragStartDot) {
+            tryPlaceLine(dragStartDot, dragSnapDot);
+        } else {
+            // No valid snap - cancel drag
+            clearInputState();
+            redraw();
+            console.log('Drag cancelled - no valid connection');
+        }
+    } else if (wasQuickTap && movedDistance < DRAG_THRESHOLD) {
+        // This was a tap/click, not a drag
+        const dot = getNearestDot(x, y);
+
+        if (dot) {
+            if (activeDot) {
+                // Second tap - try to complete line
+                if (areDotsAdjacent(activeDot, dot)) {
+                    tryPlaceLine(activeDot, dot);
+                } else {
+                    // Tapped non-adjacent dot - switch to this one
+                    activeDot = dot;
+                    startPulseAnimation();
+                    console.log('Activated new dot:', dot);
+                }
+            } else {
+                // First tap - activate this dot
+                activeDot = dot;
+                startPulseAnimation();
+                console.log('Activated dot:', dot);
+            }
+            redraw();
+        } else {
+            // Tapped empty space - deactivate
+            clearInputState();
+            redraw();
+        }
     } else {
-        console.log('No line near tap location');
+        // It was a slow tap or moved slightly but not enough to drag
+        clearInputState();
+        redraw();
+    }
+
+    // Reset drag tracking
+    dragStartDot = null;
+    isDragging = false;
+    dragCurrentPos = null;
+    dragSnapDot = null;
+    pointerDownPos = null;
+}
+
+/**
+ * Handle pointer cancel (mouse leave, touch cancel)
+ */
+function handlePointerCancel() {
+    clearInputState();
+    dragStartDot = null;
+    isDragging = false;
+    pointerDownPos = null;
+    redraw();
+}
+
+// Mouse event handlers
+function handlePointerDown(e) {
+    const coords = screenToCanvasCoords(e.clientX, e.clientY);
+    handlePointerDownAt(coords.x, coords.y);
+}
+
+function handlePointerMove(e) {
+    const coords = screenToCanvasCoords(e.clientX, e.clientY);
+    handlePointerMoveAt(coords.x, coords.y);
+}
+
+function handlePointerUp(e) {
+    const coords = screenToCanvasCoords(e.clientX, e.clientY);
+    handlePointerUpAt(coords.x, coords.y);
+}
+
+// Touch event handlers
+function handleTouchStartEnhanced(e) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
+        handlePointerDownAt(coords.x, coords.y);
+    }
+}
+
+function handleTouchMoveEnhanced(e) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
+        handlePointerMoveAt(coords.x, coords.y);
+    }
+}
+
+function handleTouchEndEnhanced(e) {
+    e.preventDefault();
+    // Use changedTouches for the final position
+    if (e.changedTouches.length > 0) {
+        const touch = e.changedTouches[0];
+        const coords = screenToCanvasCoords(touch.clientX, touch.clientY);
+        handlePointerUpAt(coords.x, coords.y);
+    } else if (dragCurrentPos) {
+        // Fallback to last known position
+        handlePointerUpAt(dragCurrentPos.x, dragCurrentPos.y);
+    }
+}
+
+// Legacy handleTap function for backward compatibility
+function handleTap(x, y) {
+    const dot = getNearestDot(x, y);
+    if (dot) {
+        if (activeDot) {
+            if (areDotsAdjacent(activeDot, dot)) {
+                tryPlaceLine(activeDot, dot);
+            } else {
+                activeDot = dot;
+                startPulseAnimation();
+            }
+        } else {
+            activeDot = dot;
+            startPulseAnimation();
+        }
+        redraw();
     }
 }
 
