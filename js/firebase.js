@@ -553,24 +553,53 @@ async function startGlowCycle(gameId, dotKey) {
 }
 
 /**
- * Opponent taps glowing dot - make it prohibited
+ * Opponent taps glowing dot - apply roulette effect
  * @param {string} gameId - Game ID
  * @param {string} dotKey - The dot that was tapped
  * @param {string} tappingPlayerId - User ID of player who tapped
  * @param {number} nextPlayerIndex - Player index whose turn will lift prohibition
+ * @param {string} rouletteIcon - The icon type: 'prohibit', 'sabotage', or 'anchor'
  */
-async function tapGlowingDot(gameId, dotKey, tappingPlayerId, nextPlayerIndex) {
+async function tapGlowingDot(gameId, dotKey, tappingPlayerId, nextPlayerIndex, rouletteIcon) {
   const gameRef = getGameRef(gameId);
   const updates = {
     'sabotage/glowingDot': null,
     'sabotage/glowStartTime': null,
     'sabotage/glowDuration': null,
-    'sabotage/prohibitedDot': dotKey,
-    'sabotage/prohibitedUntilPlayerIndex': nextPlayerIndex,
-    'sabotage/lastTappedBy': tappingPlayerId
+    'sabotage/lastTappedBy': tappingPlayerId,
+    'sabotage/lastRouletteEffect': rouletteIcon,
+    'sabotage/nextGlowTime': null, // Block new glows until turn ends
+    'sabotage/effectUntilPlayerIndex': nextPlayerIndex // Track when to clear effects
   };
+
+  if (rouletteIcon === 'prohibit') {
+    // Prohibit: Block lines to/from this dot until next player's turn
+    updates['sabotage/prohibitedDot'] = dotKey;
+    updates['sabotage/prohibitedUntilPlayerIndex'] = nextPlayerIndex; // Legacy field
+    console.log('[ROULETTE] Prohibit effect - dot prohibited:', dotKey);
+  } else if (rouletteIcon === 'anchor') {
+    // Anchor: Force active player to use this dot as their next move
+    updates['sabotage/anchoredDot'] = dotKey;
+    console.log('[ROULETTE] Anchor effect - active player forced to use dot:', dotKey);
+  } else if (rouletteIcon === 'sabotage') {
+    // Sabotage: Mark the dot for visual, destructive effects applied after delay
+    updates['sabotage/sabotagedDot'] = dotKey;
+    console.log('[ROULETTE] Sabotage effect - marked dot:', dotKey);
+  }
+
   await gameRef.update(updates);
-  console.log('Dot prohibited:', dotKey, 'until player', nextPlayerIndex, 'turn');
+  console.log('[ROULETTE] Effect applied:', rouletteIcon, 'on dot:', dotKey);
+}
+
+/**
+ * Apply sabotage destructive effects (called after 0.5s delay)
+ * @param {string} gameId - Game ID
+ * @param {object} destructiveUpdates - Line/score changes to apply
+ */
+async function applySabotageEffects(gameId, destructiveUpdates) {
+  const gameRef = getGameRef(gameId);
+  await gameRef.update(destructiveUpdates);
+  console.log('[ROULETTE] Sabotage destructive effects applied');
 }
 
 /**
@@ -593,19 +622,40 @@ async function clearGlowAndScheduleNext(gameId) {
 }
 
 /**
- * Clear prohibition when turn changes to the designated player
+ * Clear all roulette effects when turn changes
  * @param {string} gameId - Game ID
  */
-async function clearProhibition(gameId) {
+async function clearAllRouletteEffects(gameId) {
   const gameRef = getGameRef(gameId);
   const updates = {
     'sabotage/prohibitedDot': null,
     'sabotage/prohibitedUntilPlayerIndex': null,
+    'sabotage/effectUntilPlayerIndex': null,
+    'sabotage/anchoredDot': null,
+    'sabotage/sabotagedDot': null,
+    'sabotage/lastRouletteEffect': null,
     'sabotage/nextGlowTime': firebase.database.ServerValue.TIMESTAMP
   };
   await gameRef.update(updates);
-  console.log('Prohibition cleared for game:', gameId);
+  console.log('[ROULETTE] All effects cleared for game:', gameId);
 }
+
+/**
+ * Clear anchor effect after the active player uses the anchored dot
+ * (Does NOT restart glow cycle - that happens on turn change)
+ * @param {string} gameId - Game ID
+ */
+async function clearAnchor(gameId) {
+  const gameRef = getGameRef(gameId);
+  const updates = {
+    'sabotage/anchoredDot': null
+  };
+  await gameRef.update(updates);
+  console.log('[ROULETTE] Anchor cleared for game:', gameId);
+}
+
+// Backwards compatibility alias
+const clearProhibition = clearAllRouletteEffects;
 
 /**
  * Get current server timestamp for timing validation
@@ -641,12 +691,15 @@ window.FirebaseService = {
   getGameRef: getGameRef,
   generateCode: generateGameCode,
 
-  // Sabotage mechanic
+  // Sabotage/Roulette mechanic
   initializeSabotage,
   startGlowCycle,
   tapGlowingDot,
+  applySabotageEffects,
   clearGlowAndScheduleNext,
   clearProhibition,
+  clearAllRouletteEffects,
+  clearAnchor,
   getServerTime,
 
   // Constants

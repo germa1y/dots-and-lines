@@ -236,6 +236,22 @@ button:disabled {
     margin-top: 20px;
 }
 
+.icon-preview {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: 30px;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+}
+
+.icon-preview canvas {
+    background: var(--grid-bg);
+    border-radius: 4px;
+}
+
 /* ========================================
    Lobby Screen
    ======================================== */

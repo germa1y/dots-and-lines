@@ -35,10 +35,15 @@ let sabotageState = {
   glowDuration: null,
   prohibitedDot: null,
   prohibitedUntilPlayerIndex: null,
-  nextGlowTime: null
+  nextGlowTime: null,
+  anchoredDot: null,
+  sabotagedDot: null,
+  effectUntilPlayerIndex: null
 };
 let glowExpiryTimer = null;
 let nextGlowTimer = null;
+let anchorTimeoutTimer = null;
+const ANCHOR_TIMEOUT_DURATION = 3000; // 3 seconds if no valid moves
 
 /**
  * Initialize a game session
@@ -432,6 +437,18 @@ async function handleLineDrawAttempt(row, col, direction) {
     return false;
   }
 
+  // Check if anchor is active - player MUST use the anchored dot
+  if (sabotageState.anchoredDot && !lineUsesAnchoredDot(row, col, direction)) {
+    console.log('Must use anchored dot!');
+    if (typeof showNotification === 'function') {
+      showNotification('You must use the anchored dot!');
+    }
+    return false;
+  }
+
+  // Track if we need to clear the anchor after this move
+  const shouldClearAnchor = sabotageState.anchoredDot && lineUsesAnchoredDot(row, col, direction);
+
   // Find any boxes that will be completed
   const completedBoxes = findCompletedBoxes(row, col, direction);
 
@@ -544,6 +561,13 @@ async function handleLineDrawAttempt(row, col, direction) {
   try {
     await FirebaseService.updateGameState(currentGameId, updates);
     console.log('Move sent:', lineKey, 'boxes:', completedBoxes.length);
+
+    // Clear anchor if this line used the anchored dot
+    if (shouldClearAnchor) {
+      console.log('[ANCHOR] Clearing anchor after player used anchored dot');
+      await FirebaseService.clearAnchor(currentGameId);
+    }
+
     return true;
   } catch (error) {
     console.error('Failed to send move:', error);
@@ -591,6 +615,19 @@ function cleanupGameSession() {
 
   // Cancel any pending timers
   cancelIdleMoveReminder();
+
+  if (glowExpiryTimer) {
+    clearTimeout(glowExpiryTimer);
+    glowExpiryTimer = null;
+  }
+  if (nextGlowTimer) {
+    clearTimeout(nextGlowTimer);
+    nextGlowTimer = null;
+  }
+  if (anchorTimeoutTimer) {
+    clearTimeout(anchorTimeoutTimer);
+    anchorTimeoutTimer = null;
+  }
 
   gameState = null;
   currentGameId = null;
@@ -641,7 +678,7 @@ function isPenaltySquare(key) {
 // ============================================
 
 /**
- * Handle turn change - clear prohibition if it's the designated player's turn
+ * Handle turn change - clear all roulette effects when the affected player's turn starts
  * @param {number} oldPlayerIndex - Previous player index
  * @param {number} newPlayerIndex - New player index
  */
@@ -649,11 +686,19 @@ function handleTurnChange(oldPlayerIndex, newPlayerIndex) {
   // Cancel any idle move reminder when turn changes
   cancelIdleMoveReminder();
 
-  // Check if prohibition should be lifted
-  if (sabotageState.prohibitedDot &&
-      sabotageState.prohibitedUntilPlayerIndex === newPlayerIndex) {
-    console.log('Turn changed to player', newPlayerIndex, '- clearing prohibition');
-    FirebaseService.clearProhibition(currentGameId);
+  // Check if roulette effects should be cleared (turn changed to the next player)
+  // This covers: prohibit, anchor (if player didn't use it), sabotage visual
+  const hasActiveEffect = sabotageState.prohibitedDot ||
+      sabotageState.anchoredDot ||
+      sabotageState.sabotagedDot;
+
+  // Use effectUntilPlayerIndex (new) or prohibitedUntilPlayerIndex (legacy)
+  const effectEndPlayerIndex = sabotageState.effectUntilPlayerIndex ??
+      sabotageState.prohibitedUntilPlayerIndex;
+
+  if (hasActiveEffect && effectEndPlayerIndex === newPlayerIndex) {
+    console.log('[ROULETTE] Turn changed to player', newPlayerIndex, '- clearing all effects');
+    FirebaseService.clearAllRouletteEffects(currentGameId);
   }
 }
 
@@ -672,6 +717,10 @@ function handleSabotageStateUpdate(oldSabotage) {
     if (nextGlowTimer) {
       clearTimeout(nextGlowTimer);
       nextGlowTimer = null;
+    }
+    if (anchorTimeoutTimer) {
+      clearTimeout(anchorTimeoutTimer);
+      anchorTimeoutTimer = null;
     }
 
     const isMyTurnNow = isMyTurn();
@@ -711,10 +760,13 @@ function handleSabotageStateUpdate(oldSabotage) {
     }
   }
 
-  // If waiting for next glow and it's NOT my turn and no prohibition active
+  // If waiting for next glow and it's NOT my turn and no roulette effect active
   // Only the coordinator schedules the next glow cycle
+  const hasActiveRouletteEffect = sabotageState.prohibitedDot ||
+      sabotageState.anchoredDot ||
+      sabotageState.sabotagedDot;
   const checkNextGlow = sabotageState.nextGlowTime && !sabotageState.glowingDot &&
-      !sabotageState.prohibitedDot && !isMyTurnNow;
+      !hasActiveRouletteEffect && !isMyTurnNow;
 
   if (checkNextGlow) {
     // Check if we're the coordinator
@@ -739,6 +791,29 @@ function handleSabotageStateUpdate(oldSabotage) {
       } else {
         // Time already passed, start immediately
         startNewGlowCycle();
+      }
+    }
+  }
+
+  // Handle anchor timeout - if anchor has no valid moves, clear after 3 seconds
+  // Only the active player manages this timer
+  if (sabotageState.anchoredDot && isMyTurnNow) {
+    const anchorChanged = oldSabotage.anchoredDot !== sabotageState.anchoredDot;
+
+    if (anchorChanged) {
+      // Check if anchored dot has any available lines
+      const [aRow, aCol] = sabotageState.anchoredDot.split(',').map(Number);
+      const hasValidMove = dotHasAvailableLine(aRow, aCol);
+
+      if (!hasValidMove) {
+        console.log('[ANCHOR] No valid moves from anchored dot, starting 3-second timeout');
+        anchorTimeoutTimer = setTimeout(() => {
+          // Re-check that anchor is still active
+          if (sabotageState.anchoredDot) {
+            console.log('[ANCHOR] Timeout expired, clearing anchor');
+            FirebaseService.clearAnchor(currentGameId);
+          }
+        }, ANCHOR_TIMEOUT_DURATION);
       }
     }
   }
@@ -855,7 +930,36 @@ function isLineProhibited(row, col, direction) {
 }
 
 /**
- * Handle opponent tapping the glowing dot
+ * Check if a line uses the anchored dot (one of its endpoints)
+ * @param {number} row - Line row
+ * @param {number} col - Line column
+ * @param {string} direction - 'h' or 'v'
+ * @returns {boolean}
+ */
+function lineUsesAnchoredDot(row, col, direction) {
+  if (!sabotageState.anchoredDot) return true; // No anchor, any line is valid
+
+  const [aRow, aCol] = sabotageState.anchoredDot.split(',').map(Number);
+
+  if (direction === 'h') {
+    // Horizontal line from (row, col) to (row, col+1)
+    return (row === aRow && col === aCol) || (row === aRow && col + 1 === aCol);
+  } else {
+    // Vertical line from (row, col) to (row+1, col)
+    return (row === aRow && col === aCol) || (row + 1 === aRow && col === aCol);
+  }
+}
+
+/**
+ * Get anchored dot for rendering
+ * @returns {string|null} Anchored dot key "row,col" or null
+ */
+function getAnchoredDot() {
+  return sabotageState.anchoredDot || null;
+}
+
+/**
+ * Handle opponent tapping the glowing dot (roulette)
  * @param {string} dotKey - The dot that was tapped "row,col"
  */
 async function handleGlowingDotTap(dotKey) {
@@ -871,6 +975,11 @@ async function handleGlowingDotTap(dotKey) {
     return;
   }
 
+  // Get the current roulette icon
+  const rouletteIcon = typeof getCurrentRouletteIcon === 'function'
+    ? getCurrentRouletteIcon()
+    : 'prohibit';
+
   // Calculate next player index (the one after current player)
   const currentPlayer = gameState.currentPlayerIndex;
   const nextPlayer = (currentPlayer + 1) % gameState.playerCount;
@@ -879,8 +988,117 @@ async function handleGlowingDotTap(dotKey) {
   const user = FirebaseService.getUser();
   const tappingPlayerId = user ? user.uid : 'unknown';
 
-  console.log('Tapping glowing dot:', dotKey);
-  await FirebaseService.tapGlowingDot(currentGameId, dotKey, tappingPlayerId, nextPlayer);
+  console.log('[ROULETTE] Tapping dot:', dotKey, 'with effect:', rouletteIcon);
+
+  // Apply the roulette effect (marks the dot, blocks new glows)
+  await FirebaseService.tapGlowingDot(currentGameId, dotKey, tappingPlayerId, nextPlayer, rouletteIcon);
+
+  // For sabotage, delay the destructive effects by 0.5 seconds
+  if (rouletteIcon === 'sabotage') {
+    console.log('[ROULETTE] Scheduling sabotage destruction in 500ms');
+    setTimeout(async () => {
+      // Re-check that sabotage is still active (turn hasn't changed)
+      if (sabotageState.sabotagedDot === dotKey) {
+        const destructiveUpdates = calculateSabotageEffect(dotKey);
+        await FirebaseService.applySabotageEffects(currentGameId, destructiveUpdates);
+      }
+    }, 500);
+  }
+}
+
+/**
+ * Calculate sabotage effect - find all lines connected to dot and affected boxes
+ * @param {string} dotKey - The dot key "row,col"
+ * @returns {object} Firebase updates to apply
+ */
+function calculateSabotageEffect(dotKey) {
+  const [row, col] = dotKey.split(',').map(Number);
+  const gridSize = gameState?.gridSize || 6;
+  const lines = gameState?.lines || {};
+  const boxes = gameState?.boxes || {};
+  const updates = {};
+
+  // Find all lines connected to this dot
+  const connectedLines = [];
+
+  // Right (horizontal from this dot)
+  if (col < gridSize - 1 && lines[`${row},${col},h`] !== undefined) {
+    connectedLines.push({ key: `${row},${col},h`, owner: lines[`${row},${col},h`] });
+  }
+  // Down (vertical from this dot)
+  if (row < gridSize - 1 && lines[`${row},${col},v`] !== undefined) {
+    connectedLines.push({ key: `${row},${col},v`, owner: lines[`${row},${col},v`] });
+  }
+  // Left (horizontal from left neighbor)
+  if (col > 0 && lines[`${row},${col - 1},h`] !== undefined) {
+    connectedLines.push({ key: `${row},${col - 1},h`, owner: lines[`${row},${col - 1},h`] });
+  }
+  // Up (vertical from top neighbor)
+  if (row > 0 && lines[`${row - 1},${col},v`] !== undefined) {
+    connectedLines.push({ key: `${row - 1},${col},v`, owner: lines[`${row - 1},${col},v`] });
+  }
+
+  console.log('[SABOTAGE] Found connected lines:', connectedLines);
+
+  // Find all boxes that will be "un-completed" by removing these lines
+  const affectedBoxes = new Set();
+  const boxCount = gridSize - 1;
+
+  for (const line of connectedLines) {
+    const [lRow, lCol, dir] = line.key.split(',');
+    const lineRow = parseInt(lRow);
+    const lineCol = parseInt(lCol);
+
+    if (dir === 'h') {
+      // Horizontal line affects box above (lineRow-1, lineCol) and below (lineRow, lineCol)
+      if (lineRow > 0) {
+        const boxKey = `${lineRow - 1},${lineCol}`;
+        if (boxes[boxKey]) affectedBoxes.add(boxKey);
+      }
+      if (lineRow < boxCount) {
+        const boxKey = `${lineRow},${lineCol}`;
+        if (boxes[boxKey]) affectedBoxes.add(boxKey);
+      }
+    } else {
+      // Vertical line affects box to left (lineRow, lineCol-1) and right (lineRow, lineCol)
+      if (lineCol > 0) {
+        const boxKey = `${lineRow},${lineCol - 1}`;
+        if (boxes[boxKey]) affectedBoxes.add(boxKey);
+      }
+      if (lineCol < boxCount) {
+        const boxKey = `${lineRow},${lineCol}`;
+        if (boxes[boxKey]) affectedBoxes.add(boxKey);
+      }
+    }
+  }
+
+  console.log('[SABOTAGE] Affected boxes:', Array.from(affectedBoxes));
+
+  // Calculate point deductions per player
+  const pointDeductions = {};
+  for (const boxKey of affectedBoxes) {
+    const box = boxes[boxKey];
+    if (box && box.ownerId !== undefined) {
+      pointDeductions[box.ownerId] = (pointDeductions[box.ownerId] || 0) + 1;
+      // Remove the box ownership
+      updates[`boxes/${boxKey}`] = null;
+    }
+  }
+
+  // Apply point deductions
+  for (const [playerIdx, deduction] of Object.entries(pointDeductions)) {
+    const currentScore = gameState.playersArray[playerIdx]?.score || 0;
+    const newScore = Math.max(0, currentScore - deduction);
+    updates[`players/${playerIdx}/score`] = newScore;
+    console.log('[SABOTAGE] Player', playerIdx, 'loses', deduction, 'points:', currentScore, '->', newScore);
+  }
+
+  // Remove the lines
+  for (const line of connectedLines) {
+    updates[`lines/${line.key}`] = null;
+  }
+
+  return updates;
 }
 
 /**
@@ -952,7 +1170,7 @@ function startIdleMoveReminder() {
       console.log('[IDLE] Showing idle move reminder');
       if (typeof showNotification === 'function') {
         // Use persistent notification (true = dismiss on tap/click)
-        showNotification('You still have a move.', true);
+        showNotification("It's still your move ⭐", true);
       }
     }
     idleMoveReminderTimer = null;
@@ -999,12 +1217,13 @@ window.GameService = {
   getLineKey: getLineKey,
   getBoxKey: getBoxKey,
 
-  // Sabotage mechanic
+  // Sabotage/Roulette mechanic
   getSabotageState: getSabotageState,
   isLineProhibited: isLineProhibited,
   handleGlowingDotTap: handleGlowingDotTap,
   isSabotageAnimationEnabled: isSabotageAnimationEnabled,
   triggerMissPenalty: triggerMissPenalty,
   isMissPenaltyActive: isMissPenaltyActive,
-  getMissPenaltySlowdown: getMissPenaltySlowdown
+  getMissPenaltySlowdown: getMissPenaltySlowdown,
+  getAnchoredDot: getAnchoredDot
 };

@@ -53,6 +53,12 @@ let isGlowAnimating = false;
 let prohibitPulsePhase = 0;
 let missPenaltyFlashPhase = 0;
 
+// Roulette animation state (cycles through: 0=prohibit, 1=sabotage, 2=anchor)
+let rouletteIconIndex = 0;
+let roulettePhase = 0;
+const ROULETTE_ICONS = ['prohibit', 'sabotage', 'anchor'];
+const ROULETTE_CYCLE_SPEED = 0.02; // Speed of icon cycling
+
 /**
  * Create or update the pulse debug control panel
  * @param {boolean} show - Whether to show or hide the panel
@@ -953,49 +959,330 @@ function drawProhibitedSymbol(x, y) {
 }
 
 /**
- * Draw glowing red dot with pulsation (opponents only)
- * @param {number} row - Dot row
- * @param {number} col - Dot column
+ * Draw anchor symbol on a dot (visible to active player who must use it)
+ * Pulsates to draw attention
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
  */
-function drawGlowingDot(row, col) {
-    const pos = getDotPosition(row, col);
-
-    // Pulsation: scale 1.0 to 1.25
-    const pulseFactor = 1 + 0.25 * Math.sin(glowPulsePhase);
-    const glowRadius = DOT_RADIUS * pulseFactor;
+function drawAnchoredSymbol(x, y) {
+    // Oscillate between 100% and 75% size
+    const pulseFactor = 1 - 0.25 * (0.5 + 0.5 * Math.sin(prohibitPulsePhase));
+    const s = pulseFactor * 0.9;
 
     ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
-    // Outer glow effect
-    const gradient = ctx.createRadialGradient(
-        pos.x, pos.y, glowRadius * 0.5,
-        pos.x, pos.y, glowRadius * 3
-    );
-    gradient.addColorStop(0, 'rgba(255, 0, 0, 0.8)');
-    gradient.addColorStop(0.4, 'rgba(255, 0, 0, 0.4)');
-    gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
-
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, glowRadius * 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Core red dot
-    ctx.fillStyle = '#FF0000';
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, glowRadius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Black stroke
+    // Black outline first
     ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 8;
+
+    // Ring at top
+    ctx.beginPath();
+    ctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Vertical shaft
+    ctx.beginPath();
+    ctx.moveTo(x, y - 6 * s);
+    ctx.lineTo(x, y + 10 * s);
+    ctx.stroke();
+
+    // Horizontal bar (cross piece)
+    ctx.beginPath();
+    ctx.moveTo(x - 8 * s, y - 2 * s);
+    ctx.lineTo(x + 8 * s, y - 2 * s);
+    ctx.stroke();
+
+    // Curved bottom flukes
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * s, y + 4 * s);
+    ctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    ctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    ctx.stroke();
+
+    // Teal fill on top
+    ctx.strokeStyle = '#4ECDC4';
+    ctx.lineWidth = 5;
+
+    // Ring at top
+    ctx.beginPath();
+    ctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Vertical shaft
+    ctx.beginPath();
+    ctx.moveTo(x, y - 6 * s);
+    ctx.lineTo(x, y + 10 * s);
+    ctx.stroke();
+
+    // Horizontal bar
+    ctx.beginPath();
+    ctx.moveTo(x - 8 * s, y - 2 * s);
+    ctx.lineTo(x + 8 * s, y - 2 * s);
+    ctx.stroke();
+
+    // Curved bottom flukes
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * s, y + 4 * s);
+    ctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    ctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
     ctx.stroke();
 
     ctx.restore();
 }
 
 /**
- * Animate glowing dot pulsation and prohibit icon
+ * Draw sabotage (bomb) symbol on a dot (visible to ALL players during effect)
+ * Pulsates to draw attention, rotated 45 degrees like the roulette version
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
+ */
+function drawSabotagedSymbol(x, y) {
+    // Oscillate between 100% and 75% size
+    const pulseFactor = 1 - 0.25 * (0.5 + 0.5 * Math.sin(prohibitPulsePhase));
+    const radius = DOT_RADIUS * 1.8 * pulseFactor;
+
+    ctx.save();
+
+    // Rotate 45 degrees clockwise around icon center
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.translate(-x, -y);
+
+    // Bomb body (black circle)
+    ctx.fillStyle = '#222222';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Highlight reflection
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fuse stem
+    ctx.strokeStyle = '#666666';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y - radius);
+    ctx.lineTo(x, y - radius - 5);
+    ctx.stroke();
+
+    // Fuse spark/flame
+    ctx.fillStyle = '#FF6600';
+    ctx.beginPath();
+    ctx.arc(x, y - radius - 7, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFCC00';
+    ctx.beginPath();
+    ctx.arc(x, y - radius - 7, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+}
+
+/**
+ * Draw roulette icon at dot position (opponents only)
+ * Cycles through: prohibit, sabotage, anchor
+ * @param {number} row - Dot row
+ * @param {number} col - Dot column
+ */
+function drawGlowingDot(row, col) {
+    const pos = getDotPosition(row, col);
+    const currentIcon = ROULETTE_ICONS[rouletteIconIndex];
+
+    // Pulsation: 25% size oscillation (1.0 to 0.75)
+    const pulseFactor = 1 - 0.25 * (0.5 + 0.5 * Math.sin(glowPulsePhase));
+
+    ctx.save();
+
+    // Draw the current roulette icon
+    switch (currentIcon) {
+        case 'prohibit':
+            drawRouletteProhibit(pos.x, pos.y, pulseFactor);
+            break;
+        case 'sabotage':
+            drawRouletteSabotage(pos.x, pos.y, pulseFactor);
+            break;
+        case 'anchor':
+            drawRouletteAnchor(pos.x, pos.y, pulseFactor);
+            break;
+    }
+
+    ctx.restore();
+}
+
+/**
+ * Draw prohibit icon for roulette (at any position)
+ */
+function drawRouletteProhibit(x, y, scale) {
+    const radius = DOT_RADIUS * 2 * scale;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    // Black outline circle
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Black outline diagonal line
+    ctx.beginPath();
+    ctx.moveTo(x - radius * 0.7, y - radius * 0.7);
+    ctx.lineTo(x + radius * 0.7, y + radius * 0.7);
+    ctx.stroke();
+
+    // Red circle on top
+    ctx.strokeStyle = '#BF3333';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Red diagonal line
+    ctx.beginPath();
+    ctx.moveTo(x - radius * 0.7, y - radius * 0.7);
+    ctx.lineTo(x + radius * 0.7, y + radius * 0.7);
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+/**
+ * Draw sabotage (bomb) icon for roulette - rotated 45 degrees
+ */
+function drawRouletteSabotage(x, y, scale) {
+    const radius = DOT_RADIUS * 1.8 * scale;
+
+    ctx.save();
+
+    // Rotate 45 degrees clockwise around icon center
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 4);
+    ctx.translate(-x, -y);
+
+    // Bomb body (black circle)
+    ctx.fillStyle = '#222222';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Highlight reflection
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Fuse stem
+    ctx.strokeStyle = '#666666';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y - radius);
+    ctx.lineTo(x, y - radius - 5);
+    ctx.stroke();
+
+    // Fuse spark/flame
+    ctx.fillStyle = '#FF6600';
+    ctx.beginPath();
+    ctx.arc(x, y - radius - 7, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFCC00';
+    ctx.beginPath();
+    ctx.arc(x, y - radius - 7, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+}
+
+/**
+ * Draw anchor icon for roulette
+ */
+function drawRouletteAnchor(x, y, scale) {
+    const s = scale * 0.9; // Base scale
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Black outline first
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 8;
+
+    // Ring at top
+    ctx.beginPath();
+    ctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Vertical shaft
+    ctx.beginPath();
+    ctx.moveTo(x, y - 6 * s);
+    ctx.lineTo(x, y + 10 * s);
+    ctx.stroke();
+
+    // Horizontal bar (cross piece)
+    ctx.beginPath();
+    ctx.moveTo(x - 8 * s, y - 2 * s);
+    ctx.lineTo(x + 8 * s, y - 2 * s);
+    ctx.stroke();
+
+    // Curved bottom flukes
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * s, y + 4 * s);
+    ctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    ctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    ctx.stroke();
+
+    // Teal fill on top
+    ctx.strokeStyle = '#4ECDC4';
+    ctx.lineWidth = 5;
+
+    // Ring at top
+    ctx.beginPath();
+    ctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Vertical shaft
+    ctx.beginPath();
+    ctx.moveTo(x, y - 6 * s);
+    ctx.lineTo(x, y + 10 * s);
+    ctx.stroke();
+
+    // Horizontal bar
+    ctx.beginPath();
+    ctx.moveTo(x - 8 * s, y - 2 * s);
+    ctx.lineTo(x + 8 * s, y - 2 * s);
+    ctx.stroke();
+
+    // Curved bottom flukes
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * s, y + 4 * s);
+    ctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    ctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+/**
+ * Get the current roulette icon name
+ * @returns {string} Current icon: 'prohibit', 'sabotage', or 'anchor'
+ */
+function getCurrentRouletteIcon() {
+    return ROULETTE_ICONS[rouletteIconIndex];
+}
+
+/**
+ * Animate roulette icon cycling and pulsation
  */
 function animateGlowingDot() {
     // Check if we should still be animating
@@ -1011,6 +1298,13 @@ function animateGlowingDot() {
 
     // Glow pulse: ~2 cycles per second at 60fps, affected by miss penalty
     glowPulsePhase += 0.15 * slowdown;
+
+    // Roulette cycling: increment phase and switch icon when threshold reached
+    roulettePhase += ROULETTE_CYCLE_SPEED * slowdown;
+    if (roulettePhase >= 1) {
+        roulettePhase = 0;
+        rouletteIconIndex = (rouletteIconIndex + 1) % ROULETTE_ICONS.length;
+    }
 
     // Prohibit icon pulse: slower oscillation (~0.5 cycles per second)
     prohibitPulsePhase += 0.05;
@@ -1117,6 +1411,32 @@ function drawSabotageElements() {
             }
         }
 
+        // Draw anchor symbol (visible to ALL players)
+        if (sabotage.anchoredDot) {
+            const parts = sabotage.anchoredDot.split(',');
+            if (parts.length === 2) {
+                const row = parseInt(parts[0], 10);
+                const col = parseInt(parts[1], 10);
+                if (!isNaN(row) && !isNaN(col)) {
+                    const pos = getDotPosition(row, col);
+                    drawAnchoredSymbol(pos.x, pos.y);
+                }
+            }
+        }
+
+        // Draw sabotage symbol (bomb icon visible to ALL players during sabotage effect)
+        if (sabotage.sabotagedDot) {
+            const parts = sabotage.sabotagedDot.split(',');
+            if (parts.length === 2) {
+                const row = parseInt(parts[0], 10);
+                const col = parseInt(parts[1], 10);
+                if (!isNaN(row) && !isNaN(col)) {
+                    const pos = getDotPosition(row, col);
+                    drawSabotagedSymbol(pos.x, pos.y);
+                }
+            }
+        }
+
         // Draw glowing dot (only for opponents, not active player)
         let needsAnimation = false;
 
@@ -1134,6 +1454,16 @@ function drawSabotageElements() {
 
         // Also animate if there's a prohibited dot (for the prohibit icon oscillation)
         if (sabotage.prohibitedDot) {
+            needsAnimation = true;
+        }
+
+        // Also animate if there's an anchored dot (for the anchor icon pulsation)
+        if (sabotage.anchoredDot) {
+            needsAnimation = true;
+        }
+
+        // Also animate if there's a sabotaged dot (for the bomb icon pulsation)
+        if (sabotage.sabotagedDot) {
             needsAnimation = true;
         }
 
@@ -2394,3 +2724,444 @@ function checkAndMoveSpecialSquares() {
         console.log(`Special squares moved! Next movement in ${nextMoveTurn} turns`);
     }
 }
+
+// ============================================
+// ICON PREVIEW FUNCTIONS (Design Workspace)
+// ============================================
+
+/**
+ * Draw all game icons on the preview canvases
+ * Called on page load for the landing page design workspace
+ */
+function drawIconPreviews() {
+    drawIconStar();
+    drawIconPenalty();
+    drawIconProhibit();
+    drawIconSabotage();
+    drawIconAnchor();
+}
+
+/**
+ * Draw star icon - MATCHES in-game drawStar() exactly
+ */
+function drawIconStar() {
+    const canvas = document.getElementById('icon-star');
+    if (!canvas) return;
+    const pctx = canvas.getContext('2d');
+    const cx = 30, cy = 30;
+    // In-game uses Math.min(width, height) * 0.25, scaled for 60px canvas
+    const outerRadius = 15;
+    const innerRadius = outerRadius * 0.5;
+
+    pctx.clearRect(0, 0, 60, 60);
+
+    // Exact copy of drawStar() function
+    pctx.save();
+    pctx.fillStyle = '#BFA100'; // 25% darker gold (same as in-game)
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 1;
+    pctx.beginPath();
+
+    const spikes = 5;
+    let rot = Math.PI / 2 * 3;
+    const step = Math.PI / spikes;
+
+    pctx.moveTo(cx, cy - outerRadius);
+    for (let i = 0; i < spikes; i++) {
+        let x = cx + Math.cos(rot) * outerRadius;
+        let y = cy + Math.sin(rot) * outerRadius;
+        pctx.lineTo(x, y);
+        rot += step;
+        x = cx + Math.cos(rot) * innerRadius;
+        y = cy + Math.sin(rot) * innerRadius;
+        pctx.lineTo(x, y);
+        rot += step;
+    }
+    pctx.lineTo(cx, cy - outerRadius);
+    pctx.closePath();
+    pctx.fill();
+    pctx.stroke();
+    pctx.restore();
+}
+
+/**
+ * Draw penalty icon - MATCHES in-game penalty X exactly
+ */
+function drawIconPenalty() {
+    const canvas = document.getElementById('icon-penalty');
+    if (!canvas) return;
+    const pctx = canvas.getContext('2d');
+    const cx = 30, cy = 30;
+    // In-game uses Math.min(width, height) * 0.125, scaled for 60px canvas
+    const size = 7.5;
+
+    pctx.clearRect(0, 0, 60, 60);
+    pctx.lineCap = 'round';
+
+    // Black stroke outline first (slightly thicker) - exact in-game values
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 14;
+    pctx.beginPath();
+    pctx.moveTo(cx - size, cy - size);
+    pctx.lineTo(cx + size, cy + size);
+    pctx.moveTo(cx + size, cy - size);
+    pctx.lineTo(cx - size, cy + size);
+    pctx.stroke();
+
+    // Red X on top - exact in-game values
+    pctx.strokeStyle = '#BF3333'; // 25% darker red
+    pctx.lineWidth = 12;
+    pctx.beginPath();
+    pctx.moveTo(cx - size, cy - size);
+    pctx.lineTo(cx + size, cy + size);
+    pctx.moveTo(cx + size, cy - size);
+    pctx.lineTo(cx - size, cy + size);
+    pctx.stroke();
+}
+
+/**
+ * Draw prohibit icon - MATCHES in-game drawProhibitedSymbol() exactly
+ */
+function drawIconProhibit() {
+    const canvas = document.getElementById('icon-prohibit');
+    if (!canvas) return;
+    const pctx = canvas.getContext('2d');
+    const cx = 30, cy = 30;
+    // In-game uses DOT_RADIUS * 2 = 12, scaled up for visibility
+    const radius = 12;
+
+    pctx.clearRect(0, 0, 60, 60);
+    pctx.save();
+    pctx.lineCap = 'round';
+
+    // Black outline circle (doubled thickness: was 4, now 8) - exact in-game
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 8;
+    pctx.beginPath();
+    pctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    pctx.stroke();
+
+    // Black outline diagonal line
+    pctx.beginPath();
+    pctx.moveTo(cx - radius * 0.7, cy - radius * 0.7);
+    pctx.lineTo(cx + radius * 0.7, cy + radius * 0.7);
+    pctx.stroke();
+
+    // Red circle on top (doubled thickness: was 3, now 6) - exact in-game
+    pctx.strokeStyle = '#BF3333';
+    pctx.lineWidth = 6;
+    pctx.beginPath();
+    pctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    pctx.stroke();
+
+    // Red diagonal line
+    pctx.beginPath();
+    pctx.moveTo(cx - radius * 0.7, cy - radius * 0.7);
+    pctx.lineTo(cx + radius * 0.7, cy + radius * 0.7);
+    pctx.stroke();
+
+    pctx.restore();
+}
+
+/**
+ * Draw sabotage icon (bomb) - rotated 45 degrees clockwise
+ */
+function drawIconSabotage() {
+    const canvas = document.getElementById('icon-sabotage');
+    if (!canvas) return;
+    const pctx = canvas.getContext('2d');
+    const cx = 30, cy = 30;
+    const radius = 12;
+
+    pctx.clearRect(0, 0, 60, 60);
+    pctx.save();
+
+    // Rotate 45 degrees clockwise around center
+    pctx.translate(cx, cy);
+    pctx.rotate(Math.PI / 4); // 45 degrees
+    pctx.translate(-cx, -cy);
+
+    // Bomb body (black circle)
+    pctx.fillStyle = '#222222';
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 2;
+    pctx.beginPath();
+    pctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    pctx.fill();
+    pctx.stroke();
+
+    // Highlight reflection
+    pctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    pctx.beginPath();
+    pctx.arc(cx - 4, cy - 4, 3, 0, Math.PI * 2);
+    pctx.fill();
+
+    // Fuse stem
+    pctx.strokeStyle = '#666666';
+    pctx.lineWidth = 3;
+    pctx.beginPath();
+    pctx.moveTo(cx, cy - radius);
+    pctx.lineTo(cx, cy - radius - 5);
+    pctx.stroke();
+
+    // Fuse spark/flame
+    pctx.fillStyle = '#FF6600';
+    pctx.beginPath();
+    pctx.arc(cx, cy - radius - 7, 4, 0, Math.PI * 2);
+    pctx.fill();
+    pctx.fillStyle = '#FFCC00';
+    pctx.beginPath();
+    pctx.arc(cx, cy - radius - 7, 2, 0, Math.PI * 2);
+    pctx.fill();
+
+    pctx.restore();
+}
+
+/**
+ * Draw anchor icon - 100% thicker lines, 25% smaller
+ */
+function drawIconAnchor() {
+    const canvas = document.getElementById('icon-anchor');
+    if (!canvas) return;
+    const pctx = canvas.getContext('2d');
+    const cx = 30, cy = 30;
+    const s = 0.75; // Scale factor (25% smaller)
+
+    pctx.clearRect(0, 0, 60, 60);
+    pctx.lineCap = 'round';
+    pctx.lineJoin = 'round';
+
+    // Black outline first (doubled: 5 -> 10)
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 10;
+
+    // Ring at top
+    pctx.beginPath();
+    pctx.arc(cx, cy - 14 * s, 5 * s, 0, Math.PI * 2);
+    pctx.stroke();
+
+    // Vertical shaft
+    pctx.beginPath();
+    pctx.moveTo(cx, cy - 9 * s);
+    pctx.lineTo(cx, cy + 14 * s);
+    pctx.stroke();
+
+    // Horizontal bar (cross piece)
+    pctx.beginPath();
+    pctx.moveTo(cx - 10 * s, cy - 4 * s);
+    pctx.lineTo(cx + 10 * s, cy - 4 * s);
+    pctx.stroke();
+
+    // Curved bottom flukes
+    pctx.beginPath();
+    pctx.moveTo(cx - 14 * s, cy + 6 * s);
+    pctx.quadraticCurveTo(cx - 14 * s, cy + 16 * s, cx, cy + 14 * s);
+    pctx.quadraticCurveTo(cx + 14 * s, cy + 16 * s, cx + 14 * s, cy + 6 * s);
+    pctx.stroke();
+
+    // Blue/teal fill on top (doubled: 3 -> 6)
+    pctx.strokeStyle = '#4ECDC4';
+    pctx.lineWidth = 6;
+
+    // Ring at top
+    pctx.beginPath();
+    pctx.arc(cx, cy - 14 * s, 5 * s, 0, Math.PI * 2);
+    pctx.stroke();
+
+    // Vertical shaft
+    pctx.beginPath();
+    pctx.moveTo(cx, cy - 9 * s);
+    pctx.lineTo(cx, cy + 14 * s);
+    pctx.stroke();
+
+    // Horizontal bar
+    pctx.beginPath();
+    pctx.moveTo(cx - 10 * s, cy - 4 * s);
+    pctx.lineTo(cx + 10 * s, cy - 4 * s);
+    pctx.stroke();
+
+    // Curved bottom flukes
+    pctx.beginPath();
+    pctx.moveTo(cx - 14 * s, cy + 6 * s);
+    pctx.quadraticCurveTo(cx - 14 * s, cy + 16 * s, cx, cy + 14 * s);
+    pctx.quadraticCurveTo(cx + 14 * s, cy + 16 * s, cx + 14 * s, cy + 6 * s);
+    pctx.stroke();
+}
+
+// Roulette preview animation state
+let roulettePreviewIndex = 0;
+let roulettePreviewPhase = 0;
+let roulettePreviewPulsePhase = 0;
+let roulettePreviewAnimationId = null;
+
+/**
+ * Draw roulette preview with animation
+ */
+function drawIconRoulette() {
+    const canvas = document.getElementById('icon-roulette');
+    if (!canvas) return;
+    const pctx = canvas.getContext('2d');
+    const cx = 30, cy = 30;
+
+    // 25% size oscillation (1.0 to 0.75)
+    const pulseFactor = 1 - 0.25 * (0.5 + 0.5 * Math.sin(roulettePreviewPulsePhase));
+    const currentIcon = ROULETTE_ICONS[roulettePreviewIndex];
+
+    pctx.clearRect(0, 0, 60, 60);
+
+    switch (currentIcon) {
+        case 'prohibit':
+            drawRouletteProhibitPreview(pctx, cx, cy, pulseFactor);
+            break;
+        case 'sabotage':
+            drawRouletteSabotagePreview(pctx, cx, cy, pulseFactor);
+            break;
+        case 'anchor':
+            drawRouletteAnchorPreview(pctx, cx, cy, pulseFactor);
+            break;
+    }
+}
+
+function drawRouletteProhibitPreview(pctx, x, y, scale) {
+    const radius = 12 * scale;
+
+    pctx.save();
+    pctx.lineCap = 'round';
+
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 8;
+    pctx.beginPath();
+    pctx.arc(x, y, radius, 0, Math.PI * 2);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x - radius * 0.7, y - radius * 0.7);
+    pctx.lineTo(x + radius * 0.7, y + radius * 0.7);
+    pctx.stroke();
+
+    pctx.strokeStyle = '#BF3333';
+    pctx.lineWidth = 6;
+    pctx.beginPath();
+    pctx.arc(x, y, radius, 0, Math.PI * 2);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x - radius * 0.7, y - radius * 0.7);
+    pctx.lineTo(x + radius * 0.7, y + radius * 0.7);
+    pctx.stroke();
+
+    pctx.restore();
+}
+
+function drawRouletteSabotagePreview(pctx, x, y, scale) {
+    const radius = 11 * scale;
+
+    pctx.save();
+    pctx.translate(x, y);
+    pctx.rotate(Math.PI / 4);
+    pctx.translate(-x, -y);
+
+    pctx.fillStyle = '#222222';
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 2;
+    pctx.beginPath();
+    pctx.arc(x, y, radius, 0, Math.PI * 2);
+    pctx.fill();
+    pctx.stroke();
+
+    pctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    pctx.beginPath();
+    pctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.25, 0, Math.PI * 2);
+    pctx.fill();
+
+    pctx.strokeStyle = '#666666';
+    pctx.lineWidth = 3;
+    pctx.beginPath();
+    pctx.moveTo(x, y - radius);
+    pctx.lineTo(x, y - radius - 4);
+    pctx.stroke();
+
+    pctx.fillStyle = '#FF6600';
+    pctx.beginPath();
+    pctx.arc(x, y - radius - 6, 3, 0, Math.PI * 2);
+    pctx.fill();
+    pctx.fillStyle = '#FFCC00';
+    pctx.beginPath();
+    pctx.arc(x, y - radius - 6, 1.5, 0, Math.PI * 2);
+    pctx.fill();
+
+    pctx.restore();
+}
+
+function drawRouletteAnchorPreview(pctx, x, y, scale) {
+    const s = scale * 0.75;
+
+    pctx.save();
+    pctx.lineCap = 'round';
+    pctx.lineJoin = 'round';
+
+    pctx.strokeStyle = '#000000';
+    pctx.lineWidth = 8;
+
+    pctx.beginPath();
+    pctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x, y - 6 * s);
+    pctx.lineTo(x, y + 10 * s);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x - 8 * s, y - 2 * s);
+    pctx.lineTo(x + 8 * s, y - 2 * s);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x - 10 * s, y + 4 * s);
+    pctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    pctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    pctx.stroke();
+
+    pctx.strokeStyle = '#4ECDC4';
+    pctx.lineWidth = 5;
+
+    pctx.beginPath();
+    pctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x, y - 6 * s);
+    pctx.lineTo(x, y + 10 * s);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x - 8 * s, y - 2 * s);
+    pctx.lineTo(x + 8 * s, y - 2 * s);
+    pctx.stroke();
+    pctx.beginPath();
+    pctx.moveTo(x - 10 * s, y + 4 * s);
+    pctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    pctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    pctx.stroke();
+
+    pctx.restore();
+}
+
+/**
+ * Animate the roulette preview
+ */
+function animateRoulettePreview() {
+    roulettePreviewPulsePhase += 0.15;
+    roulettePreviewPhase += ROULETTE_CYCLE_SPEED;
+
+    if (roulettePreviewPhase >= 1) {
+        roulettePreviewPhase = 0;
+        roulettePreviewIndex = (roulettePreviewIndex + 1) % ROULETTE_ICONS.length;
+    }
+
+    drawIconRoulette();
+    roulettePreviewAnimationId = requestAnimationFrame(animateRoulettePreview);
+}
+
+// Initialize icon previews when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    // Small delay to ensure canvases are rendered
+    setTimeout(() => {
+        drawIconPreviews();
+        animateRoulettePreview();
+    }, 100);
+});

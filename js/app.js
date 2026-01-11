@@ -10,6 +10,18 @@ let authReady = false;
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Dots and Lines - App initialized');
 
+    // Check for ?join=CODE URL parameter and prefill game code
+    const urlParams = new URLSearchParams(window.location.search);
+    const joinCode = urlParams.get('join');
+    if (joinCode) {
+        const gameCodeInput = document.getElementById('game-code-input');
+        if (gameCodeInput) {
+            gameCodeInput.value = joinCode.toUpperCase().slice(0, 6);
+        }
+        // Clear the URL parameter without refreshing
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     // Show menu screen (landing page)
     showScreen('menu');
 
@@ -49,9 +61,12 @@ document.addEventListener('DOMContentLoaded', async function() {
 function enableGameButtons() {
     const createGameBtn = document.getElementById('create-game-btn');
     const joinGameBtn = document.getElementById('join-game-btn');
+    const gameCodeInput = document.getElementById('game-code-input');
 
     if (createGameBtn) {
-        createGameBtn.disabled = false;
+        // Only enable Host Game if game code input is empty
+        const hasGameCode = gameCodeInput && gameCodeInput.value.trim().length > 0;
+        createGameBtn.disabled = hasGameCode;
         createGameBtn.textContent = 'Host Game';
     }
     if (joinGameBtn) {
@@ -130,12 +145,15 @@ function setupMenuScreen() {
                 return;
             }
 
-            const playerName = playerNameInput ? playerNameInput.value.trim() : '';
+            let playerName = playerNameInput ? playerNameInput.value.trim() : '';
 
             if (!playerName) {
                 alert('Please enter your name');
                 return;
             }
+
+            // Enforce 12-character limit
+            playerName = playerName.slice(0, 12);
 
             // Disable button during operation
             createGameBtn.disabled = true;
@@ -172,13 +190,16 @@ function setupMenuScreen() {
                 return;
             }
 
-            const playerName = playerNameInput ? playerNameInput.value.trim() : '';
+            let playerName = playerNameInput ? playerNameInput.value.trim() : '';
             const gameCode = gameCodeInput ? gameCodeInput.value.trim().toUpperCase() : '';
 
             if (!playerName) {
                 alert('Please enter your name');
                 return;
             }
+
+            // Enforce 12-character limit
+            playerName = playerName.slice(0, 12);
 
             if (!gameCode || gameCode.length !== 6) {
                 alert('Please enter a valid 6-character game code');
@@ -208,11 +229,24 @@ function setupMenuScreen() {
         });
     }
 
-    // Auto-uppercase game code input
+    // Auto-uppercase game code input and disable Host Game when code is entered
     if (gameCodeInput) {
         gameCodeInput.addEventListener('input', function() {
             this.value = this.value.toUpperCase();
+            // Disable Host Game button when game code is entered
+            if (createGameBtn && authReady) {
+                if (this.value.trim().length > 0) {
+                    createGameBtn.disabled = true;
+                } else {
+                    createGameBtn.disabled = false;
+                }
+            }
         });
+
+        // Check initial state (for URL parameter prefill)
+        if (gameCodeInput.value.trim().length > 0 && createGameBtn) {
+            createGameBtn.disabled = true;
+        }
     }
 }
 
@@ -221,6 +255,7 @@ function setupMenuScreen() {
  */
 function setupLobbyScreen() {
     const copyCodeBtn = document.getElementById('copy-code-btn');
+    const shareCodeBtn = document.getElementById('share-code-btn');
     const startGameBtn = document.getElementById('start-game-btn');
     const leaveLobbyBtn = document.getElementById('leave-lobby-btn');
 
@@ -245,6 +280,56 @@ function setupLobbyScreen() {
                 } else {
                     // Fallback for older browsers
                     alert('Game code: ' + code);
+                }
+            }
+        });
+    }
+
+    // Share game code button (Web Share API with clipboard fallback)
+    if (shareCodeBtn) {
+        shareCodeBtn.addEventListener('click', async function() {
+            const gameCodeEl = document.getElementById('game-code');
+            if (gameCodeEl) {
+                const code = gameCodeEl.textContent;
+                const shareUrl = `${window.location.origin}${window.location.pathname}?join=${code}`;
+
+                // Try Web Share API first (mobile devices)
+                if (navigator.share) {
+                    try {
+                        await navigator.share({
+                            title: "Dots & Boxes",
+                            text: "Let's play Dots & Boxes!!",
+                            url: shareUrl
+                        });
+                        shareCodeBtn.textContent = 'Shared!';
+                        setTimeout(() => {
+                            shareCodeBtn.textContent = 'Share';
+                        }, 2000);
+                        return;
+                    } catch (err) {
+                        // User cancelled - don't fall back to clipboard
+                        if (err.name === 'AbortError') {
+                            return;
+                        }
+                        // Other error - fall through to clipboard
+                        console.log('Share API failed, falling back to clipboard');
+                    }
+                }
+
+                // Fallback: copy share URL to clipboard
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(shareUrl).then(() => {
+                        shareCodeBtn.textContent = 'Link Copied!';
+                        setTimeout(() => {
+                            shareCodeBtn.textContent = 'Share';
+                        }, 2000);
+                    }).catch(err => {
+                        console.error('Failed to copy:', err);
+                        alert('Share link: ' + shareUrl);
+                    });
+                } else {
+                    // Last resort fallback
+                    alert('Share link: ' + shareUrl);
                 }
             }
         });
@@ -379,12 +464,20 @@ function updateLobby(lobbyData) {
     // Show/hide start button based on host status and player count
     const startGameBtn = document.getElementById('start-game-btn');
     if (startGameBtn) {
-        const playerCount = lobbyData.players ? lobbyData.players.length : 0;
-        if (lobbyData.isHost && playerCount >= 2) {
-            startGameBtn.classList.remove('hidden');
-            startGameBtn.disabled = false;
+        // Only host can see Start Game button, and only with 2+ players
+        if (lobbyData.isHost === true) {
+            const playerCount = lobbyData.players ? lobbyData.players.length : 0;
+            if (playerCount >= 2) {
+                startGameBtn.classList.remove('hidden');
+                startGameBtn.disabled = false;
+            } else {
+                // Host but not enough players
+                startGameBtn.classList.add('hidden');
+            }
         } else {
+            // Not host - always hide
             startGameBtn.classList.add('hidden');
+            startGameBtn.disabled = true;
         }
     }
 }
