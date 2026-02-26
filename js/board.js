@@ -70,6 +70,8 @@ let rouletteSettling = false;
 let rouletteSettleSteps = []; // array of delays in ms for each icon change
 let rouletteSettleStepIndex = 0;
 let rouletteSettleAccum = 0; // time accumulator for current step
+let rouletteSettleRow = -1; // dot row to keep rendering during settle
+let rouletteSettleCol = -1; // dot col to keep rendering during settle
 
 /**
  * Create or update the pulse debug control panel
@@ -1365,6 +1367,8 @@ function animateGlowingDot() {
             if (rouletteSettleStepIndex >= rouletteSettleSteps.length) {
                 // Settling complete - animation is purely visual, effect already applied
                 rouletteSettling = false;
+                rouletteSettleRow = -1;
+                rouletteSettleCol = -1;
                 console.log('[ROULETTE] Settle animation complete, landed on:', ROULETTE_ICONS[rouletteIconIndex]);
             }
         }
@@ -1409,10 +1413,12 @@ function startGlowAnimation() {
  */
 function stopGlowAnimation() {
     isGlowAnimating = false;
-    rouletteSettling = false; // Cancel any in-progress settle
-    if (glowAnimationId) {
-        cancelAnimationFrame(glowAnimationId);
-        glowAnimationId = null;
+    if (!rouletteSettling) {
+        // Only cancel animation frame if not settling; settle manages its own lifecycle
+        if (glowAnimationId) {
+            cancelAnimationFrame(glowAnimationId);
+            glowAnimationId = null;
+        }
     }
 }
 
@@ -1514,7 +1520,12 @@ function drawSabotageElements() {
         // Draw glowing dot (only for opponents, not active player)
         let needsAnimation = false;
 
-        if (sabotage.glowingDot && !isMyTurn) {
+        if (rouletteSettling && rouletteSettleRow >= 0) {
+            // During settle animation, keep rendering at the stored position
+            // even after Firebase has cleared the glowing dot
+            drawGlowingDot(rouletteSettleRow, rouletteSettleCol);
+            needsAnimation = true;
+        } else if (sabotage.glowingDot && !isMyTurn) {
             const parts = sabotage.glowingDot.split(',');
             if (parts.length === 2) {
                 const row = parseInt(parts[0], 10);
@@ -1603,6 +1614,8 @@ function checkGlowingDotTap(x, y) {
         console.log('[SABOTAGE] Glowing dot tapped! Chosen icon:', chosenIcon, 'for dot:', sabotage.glowingDot);
         GameService.handleGlowingDotTap(sabotage.glowingDot, chosenIcon);
         // Start visual-only settle animation for the tapper's screen
+        rouletteSettleRow = glowRow;
+        rouletteSettleCol = glowCol;
         beginRouletteSettle(targetIndex);
         return true;
     }
