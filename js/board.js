@@ -1348,6 +1348,7 @@ function beginRouletteSettle(targetIndex, onComplete) {
 let rouletteAppearanceCount = 0;
 let rouletteTooltipVisible = false;
 let rouletteTooltipAnimId = null;
+let rouletteLastCountedDot = null; // Track which dot we already counted
 
 function stopRouletteTooltipAnimation() {
     if (rouletteTooltipAnimId) {
@@ -1368,13 +1369,17 @@ function dismissRouletteTooltipPermanently() {
 
 /**
  * Called each time the roulette appears on an opponent's turn.
- * Shows the tooltip every 3rd appearance until permanently dismissed.
+ * Shows the tooltip every 3rd unique appearance until permanently dismissed.
+ * @param {string} dotKey - The current glowing dot key to deduplicate per-frame calls
  */
-function onRouletteAppeared() {
+function onRouletteAppeared(dotKey) {
     // Already permanently dismissed
     if (localStorage.getItem('roulette-tooltip-dismissed')) return;
     // Don't re-trigger while visible
     if (rouletteTooltipVisible) return;
+    // Only count each unique dot appearance once
+    if (dotKey === rouletteLastCountedDot) return;
+    rouletteLastCountedDot = dotKey;
 
     rouletteAppearanceCount++;
     if (rouletteAppearanceCount % 3 !== 0) return;
@@ -1662,7 +1667,7 @@ function drawSabotageElements() {
                     drawGlowingDot(row, col);
                     needsAnimation = true;
                     // Track roulette appearance for tooltip
-                    onRouletteAppeared();
+                    onRouletteAppeared(sabotage.glowingDot);
                 }
             }
         }
