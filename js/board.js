@@ -1340,17 +1340,46 @@ function beginRouletteSettle(targetIndex, onComplete) {
 }
 
 /**
- * Show a one-time tooltip explaining the roulette mechanic.
- * Displays "Tap the roulette [animated icons] to sabotage!" with an
- * inline canvas cycling through the three roulette icons.
- * Only shown once per device (persisted via localStorage).
+ * Roulette tooltip state.
+ * Shows every 3rd roulette appearance until user interacts with the roulette
+ * directly or taps the X dismiss button. Tapping elsewhere on screen to
+ * dismiss the tooltip does NOT count as permanent dismissal.
  */
-let rouletteTooltipShown = false; // Session guard to prevent re-triggering
-function showRouletteTooltip() {
-    if (rouletteTooltipShown) return;
-    if (localStorage.getItem('roulette-tooltip-shown')) return;
-    rouletteTooltipShown = true;
-    localStorage.setItem('roulette-tooltip-shown', '1');
+let rouletteAppearanceCount = 0;
+let rouletteTooltipVisible = false;
+let rouletteTooltipAnimId = null;
+
+function stopRouletteTooltipAnimation() {
+    if (rouletteTooltipAnimId) {
+        cancelAnimationFrame(rouletteTooltipAnimId);
+        rouletteTooltipAnimId = null;
+    }
+}
+
+/**
+ * Mark the roulette tooltip as permanently dismissed.
+ * Called when user taps X on tooltip or interacts with the roulette directly.
+ */
+function dismissRouletteTooltipPermanently() {
+    localStorage.setItem('roulette-tooltip-dismissed', '1');
+    rouletteTooltipVisible = false;
+    stopRouletteTooltipAnimation();
+}
+
+/**
+ * Called each time the roulette appears on an opponent's turn.
+ * Shows the tooltip every 3rd appearance until permanently dismissed.
+ */
+function onRouletteAppeared() {
+    // Already permanently dismissed
+    if (localStorage.getItem('roulette-tooltip-dismissed')) return;
+    // Don't re-trigger while visible
+    if (rouletteTooltipVisible) return;
+
+    rouletteAppearanceCount++;
+    if (rouletteAppearanceCount % 3 !== 0) return;
+
+    rouletteTooltipVisible = true;
 
     // Build the notification HTML with an inline canvas
     const canvasSize = 28;
@@ -1360,10 +1389,17 @@ function showRouletteTooltip() {
         '<span style="vertical-align:middle"> to sabotage!</span>';
 
     if (typeof showNotification === 'function') {
-        showNotification(html, 8000, {
+        showNotification(html, 3000, {
             html: true,
             dismissButton: true,
-            onDismiss: function() { stopTooltipAnimation(); }
+            onDismiss: function(dismissedByButton) {
+                stopRouletteTooltipAnimation();
+                rouletteTooltipVisible = false;
+                // Only permanently dismiss if user tapped the X button
+                if (dismissedByButton) {
+                    dismissRouletteTooltipPermanently();
+                }
+            }
         });
     }
 
@@ -1371,15 +1407,7 @@ function showRouletteTooltip() {
     let tooltipIconIndex = 0;
     let tooltipPhase = 0;
     let tooltipPulsePhase = 0;
-    let tooltipAnimId = null;
     let tooltipLastTime = 0;
-
-    function stopTooltipAnimation() {
-        if (tooltipAnimId) {
-            cancelAnimationFrame(tooltipAnimId);
-            tooltipAnimId = null;
-        }
-    }
 
     setTimeout(function() {
         const tc = document.getElementById('roulette-tooltip-canvas');
@@ -1400,10 +1428,9 @@ function showRouletteTooltip() {
                 tooltipIconIndex = (tooltipIconIndex + 1) % ROULETTE_ICONS.length;
             }
 
-            // Clear and draw
             tctx.clearRect(0, 0, canvasSize, canvasSize);
             tctx.save();
-            const scale = canvasSize / 30; // Icon functions designed for ~30px range
+            const scale = canvasSize / 30;
             const cx = canvasSize / 2;
             const cy = canvasSize / 2;
             const pulse = 1 - 0.15 * (0.5 + 0.5 * Math.sin(tooltipPulsePhase));
@@ -1421,7 +1448,7 @@ function showRouletteTooltip() {
             }
             tctx.restore();
 
-            tooltipAnimId = requestAnimationFrame(animateTooltip);
+            rouletteTooltipAnimId = requestAnimationFrame(animateTooltip);
         }
         animateTooltip();
     }, 50);
@@ -1634,8 +1661,8 @@ function drawSabotageElements() {
                 if (!isNaN(row) && !isNaN(col)) {
                     drawGlowingDot(row, col);
                     needsAnimation = true;
-                    // Show tooltip on first roulette appearance
-                    showRouletteTooltip();
+                    // Track roulette appearance for tooltip
+                    onRouletteAppeared();
                 }
             }
         }
@@ -1716,6 +1743,8 @@ function checkGlowingDotTap(x, y) {
         const chosenIcon = ROULETTE_ICONS[targetIndex];
         console.log('[SABOTAGE] Glowing dot tapped! Chosen icon:', chosenIcon, 'for dot:', sabotage.glowingDot);
         GameService.handleGlowingDotTap(sabotage.glowingDot, chosenIcon);
+        // User interacted with roulette — permanently dismiss tooltip
+        dismissRouletteTooltipPermanently();
         // Start visual-only settle animation; deferred effects fire via callback when it finishes
         rouletteSettleRow = glowRow;
         rouletteSettleCol = glowCol;
@@ -2087,9 +2116,11 @@ function handlePointerUpAt(x, y) {
     const isOpponent = typeof GameService !== 'undefined' && !GameService.isMyTurn();
 
     if (isOpponent) {
-        // Opponents can only interact via sabotage taps
+        // Opponents can only interact via sabotage taps or special square tooltips
         if (wasQuickTap && movedDistance < DRAG_THRESHOLD) {
-            checkGlowingDotTap(x, y); // This handles hits, misses, and penalties
+            if (!checkGlowingDotTap(x, y)) {
+                checkSpecialSquareTap(x, y);
+            }
         }
         // Reset all state and return - no normal gameplay for opponents
         clearInputState();
@@ -2136,7 +2167,8 @@ function handlePointerUpAt(x, y) {
             }
             redraw();
         } else {
-            // Tapped empty space - deactivate
+            // Tapped empty space - check for special square tooltip, then deactivate
+            checkSpecialSquareTap(x, y);
             clearInputState();
             redraw();
         }
@@ -2153,6 +2185,53 @@ function handlePointerUpAt(x, y) {
     dragSnapDot = null;
     pointerDownPos = null;
     canvas.classList.remove('dragging'); // Remove dragging cursor class
+}
+
+/**
+ * Check if a tap/click hits an uncompleted special square and show a tooltip.
+ * @param {number} x - Canvas X coordinate
+ * @param {number} y - Canvas Y coordinate
+ * @returns {boolean} True if a special square was tapped
+ */
+function checkSpecialSquareTap(x, y) {
+    let specialSquares = { golden: [], penalty: [] };
+    if (typeof GameService !== 'undefined' && GameService.getSpecialSquares) {
+        specialSquares = GameService.getSpecialSquares();
+    }
+    if (!specialSquares.golden && !specialSquares.penalty) return false;
+
+    // Helper to check if box is already completed
+    const isCompleted = function(key) {
+        return boxes.some(function(b) { return b.row + ',' + b.col === key; });
+    };
+
+    // Check all special squares
+    const allSquares = [];
+    if (specialSquares.golden) {
+        specialSquares.golden.forEach(function(key) {
+            if (!isCompleted(key)) allSquares.push({ key: key, type: 'golden' });
+        });
+    }
+    if (specialSquares.penalty) {
+        specialSquares.penalty.forEach(function(key) {
+            if (!isCompleted(key)) allSquares.push({ key: key, type: 'penalty' });
+        });
+    }
+
+    for (const sq of allSquares) {
+        const [row, col] = sq.key.split(',').map(Number);
+        const topLeft = getDotPosition(row, col);
+        const bottomRight = getDotPosition(row + 1, col + 1);
+
+        if (x >= topLeft.x && x <= bottomRight.x && y >= topLeft.y && y <= bottomRight.y) {
+            const msg = sq.type === 'golden' ? 'Extra move.' : 'Lose turn.';
+            if (typeof showNotification === 'function') {
+                showNotification(msg, 2000);
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 /**

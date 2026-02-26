@@ -53,6 +53,19 @@ document.addEventListener('DOMContentLoaded', async function() {
             showAuthError(result.error || 'Unknown error');
         }
     }
+
+    // Reset roulette tooltip checkbox
+    const resetTooltipCheckbox = document.getElementById('reset-roulette-tooltip');
+    if (resetTooltipCheckbox) {
+        resetTooltipCheckbox.addEventListener('change', function() {
+            if (this.checked) {
+                localStorage.removeItem('roulette-tooltip-dismissed');
+                console.log('Roulette tooltip reset — will appear again on 3rd roulette cycle');
+            } else {
+                localStorage.setItem('roulette-tooltip-dismissed', '1');
+            }
+        });
+    }
 });
 
 /**
@@ -558,14 +571,14 @@ function showNotification(message, duration = 2000, options = {}) {
         persistentNotificationDismissHandler = null;
     }
 
-    function dismissNotification() {
+    function dismissNotification(dismissedByButton) {
         notificationEl.classList.remove('show');
         notificationEl.classList.add('hidden');
         notificationEl.style.pointerEvents = '';
         document.removeEventListener('click', persistentNotificationDismissHandler);
         document.removeEventListener('touchstart', persistentNotificationDismissHandler);
         persistentNotificationDismissHandler = null;
-        if (options.onDismiss) options.onDismiss();
+        if (options.onDismiss) options.onDismiss(!!dismissedByButton);
     }
 
     // Set message content
@@ -582,7 +595,7 @@ function showNotification(message, duration = 2000, options = {}) {
         btn.textContent = '\u00D7'; // multiplication sign (x)
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
-            dismissNotification();
+            dismissNotification(true);
         });
         notificationEl.appendChild(btn);
         notificationEl.style.pointerEvents = 'auto';
