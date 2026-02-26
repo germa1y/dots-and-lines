@@ -961,8 +961,9 @@ function getAnchoredDot() {
 /**
  * Handle opponent tapping the glowing dot (roulette)
  * @param {string} dotKey - The dot that was tapped "row,col"
+ * @param {string} rouletteIcon - The randomly chosen icon from the settle animation
  */
-async function handleGlowingDotTap(dotKey) {
+async function handleGlowingDotTap(dotKey, rouletteIcon) {
   // Validate this is the glowing dot
   if (sabotageState.glowingDot !== dotKey) {
     console.log('Tapped dot is not the glowing dot');
@@ -975,10 +976,10 @@ async function handleGlowingDotTap(dotKey) {
     return;
   }
 
-  // Get the current roulette icon
-  const rouletteIcon = typeof getCurrentRouletteIcon === 'function'
-    ? getCurrentRouletteIcon()
-    : 'prohibit';
+  // Icon is now passed in from the settle animation (randomly determined)
+  if (!rouletteIcon) {
+    rouletteIcon = 'prohibit'; // Fallback
+  }
 
   // Calculate next player index (the one after current player)
   const currentPlayer = gameState.currentPlayerIndex;

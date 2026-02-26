@@ -57,7 +57,19 @@ let missPenaltyFlashPhase = 0;
 let rouletteIconIndex = 0;
 let roulettePhase = 0;
 const ROULETTE_ICONS = ['prohibit', 'sabotage', 'anchor'];
-const ROULETTE_CYCLE_SPEED = 0.02; // Speed of icon cycling
+const ROULETTE_CYCLE_MS = 833; // Time per icon cycle in ms (desktop)
+const ROULETTE_CYCLE_MS_MOBILE = 500; // Time per icon cycle in ms (mobile, faster)
+let lastAnimationTime = 0; // For time-based animation
+
+// Mobile detection
+const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+    ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+
+// Roulette settle (slot-machine deceleration) state
+let rouletteSettling = false;
+let rouletteSettleSteps = []; // array of delays in ms for each icon change
+let rouletteSettleStepIndex = 0;
+let rouletteSettleAccum = 0; // time accumulator for current step
 
 /**
  * Create or update the pulse debug control panel
@@ -1282,6 +1294,44 @@ function getCurrentRouletteIcon() {
 }
 
 /**
+ * Begin roulette settle animation (visual-only slot-machine deceleration).
+ * The game effect has already been applied; this just animates the icon
+ * cycling down to the chosen result for the tapper's screen.
+ * @param {number} targetIndex - Index into ROULETTE_ICONS to land on
+ */
+function beginRouletteSettle(targetIndex) {
+    if (rouletteSettling) return; // Already settling
+
+    // Calculate steps to land on target: at least 3 full cycles for anticipation
+    const minCycles = 3;
+    const baseSteps = minCycles * ROULETTE_ICONS.length; // 9
+
+    // Extra steps needed to land on the target from current position
+    let stepsToTarget = (targetIndex - rouletteIconIndex + ROULETTE_ICONS.length) % ROULETTE_ICONS.length;
+    if (stepsToTarget === 0) stepsToTarget = ROULETTE_ICONS.length; // At least one more full cycle
+
+    const totalSteps = baseSteps + stepsToTarget;
+
+    // Generate delays with quadratic easing (fast start, slow end)
+    const startDelay = 80;  // ms, fast cycling
+    const endDelay = 400;   // ms, slow final steps
+    const steps = [];
+    for (let i = 0; i < totalSteps; i++) {
+        const progress = i / (totalSteps - 1);
+        const delay = startDelay + (endDelay - startDelay) * progress * progress;
+        steps.push(delay);
+    }
+
+    console.log('[ROULETTE] Starting settle: target=' + ROULETTE_ICONS[targetIndex] +
+        ', steps=' + totalSteps + ', from=' + ROULETTE_ICONS[rouletteIconIndex]);
+
+    rouletteSettling = true;
+    rouletteSettleSteps = steps;
+    rouletteSettleStepIndex = 0;
+    rouletteSettleAccum = 0;
+}
+
+/**
  * Animate roulette icon cycling and pulsation
  */
 function animateGlowingDot() {
@@ -1291,26 +1341,48 @@ function animateGlowingDot() {
         return;
     }
 
+    // Time-based animation: compute delta time
+    const now = performance.now();
+    const deltaTime = lastAnimationTime > 0 ? Math.min(now - lastAnimationTime, 100) : 16; // cap at 100ms
+    lastAnimationTime = now;
+
     // Get slowdown factor from miss penalty (1.0 = normal, 0.1 = 90% slower)
     const slowdown = (typeof GameService !== 'undefined' && GameService.getMissPenaltySlowdown)
         ? GameService.getMissPenaltySlowdown()
         : 1.0;
 
-    // Glow pulse: ~2 cycles per second at 60fps, affected by miss penalty
-    glowPulsePhase += 0.15 * slowdown;
+    // Glow pulse: time-based, ~2 cycles per second, affected by miss penalty
+    glowPulsePhase += (deltaTime / 1000) * Math.PI * 4 * slowdown;
 
-    // Roulette cycling: increment phase and switch icon when threshold reached
-    roulettePhase += ROULETTE_CYCLE_SPEED * slowdown;
-    if (roulettePhase >= 1) {
-        roulettePhase = 0;
-        rouletteIconIndex = (rouletteIconIndex + 1) % ROULETTE_ICONS.length;
+    if (rouletteSettling) {
+        // Slot-machine deceleration: step through icons with increasing delays
+        rouletteSettleAccum += deltaTime;
+        const currentStepDelay = rouletteSettleSteps[rouletteSettleStepIndex];
+        if (rouletteSettleAccum >= currentStepDelay) {
+            rouletteSettleAccum -= currentStepDelay;
+            rouletteIconIndex = (rouletteIconIndex + 1) % ROULETTE_ICONS.length;
+            rouletteSettleStepIndex++;
+            if (rouletteSettleStepIndex >= rouletteSettleSteps.length) {
+                // Settling complete - animation is purely visual, effect already applied
+                rouletteSettling = false;
+                console.log('[ROULETTE] Settle animation complete, landed on:', ROULETTE_ICONS[rouletteIconIndex]);
+            }
+        }
+    } else {
+        // Normal cycling: time-based, faster on mobile
+        const cycleMs = isMobileDevice ? ROULETTE_CYCLE_MS_MOBILE : ROULETTE_CYCLE_MS;
+        roulettePhase += (deltaTime / cycleMs) * slowdown;
+        if (roulettePhase >= 1) {
+            roulettePhase = 0;
+            rouletteIconIndex = (rouletteIconIndex + 1) % ROULETTE_ICONS.length;
+        }
     }
 
-    // Prohibit icon pulse: slower oscillation (~0.5 cycles per second)
-    prohibitPulsePhase += 0.05;
+    // Prohibit icon pulse: time-based, ~0.5 cycles per second
+    prohibitPulsePhase += (deltaTime / 1000) * Math.PI;
 
-    // Miss penalty flash: fast pulsing red vignette
-    missPenaltyFlashPhase += 0.2;
+    // Miss penalty flash: time-based fast pulsing
+    missPenaltyFlashPhase += (deltaTime / 1000) * Math.PI * 8;
 
     redraw();
 
@@ -1327,6 +1399,7 @@ function startGlowAnimation() {
     if (!isGlowAnimating) {
         isGlowAnimating = true;
         glowPulsePhase = 0;
+        lastAnimationTime = performance.now();
         animateGlowingDot();
     }
 }
@@ -1336,6 +1409,7 @@ function startGlowAnimation() {
  */
 function stopGlowAnimation() {
     isGlowAnimating = false;
+    rouletteSettling = false; // Cancel any in-progress settle
     if (glowAnimationId) {
         cancelAnimationFrame(glowAnimationId);
         glowAnimationId = null;
@@ -1502,6 +1576,12 @@ function checkGlowingDotTap(x, y) {
     // If no glowing dot, no sabotage interaction possible
     if (!sabotage || !sabotage.glowingDot) return false;
 
+    // Block all taps during roulette settle animation
+    if (rouletteSettling) {
+        console.log('[SABOTAGE] Roulette settling, tap ignored');
+        return true; // Consume the tap but don't process it
+    }
+
     // Check if miss penalty is active - can't tap during penalty
     if (GameService.isMissPenaltyActive && GameService.isMissPenaltyActive()) {
         console.log('[SABOTAGE] Miss penalty active, tap ignored');
@@ -1517,8 +1597,13 @@ function checkGlowingDotTap(x, y) {
 
     if (distanceToGlow <= TAP_TOLERANCE) {
         // Correct tap on glowing dot!
-        console.log('[SABOTAGE] Glowing dot tapped! Sabotaging dot:', sabotage.glowingDot);
-        GameService.handleGlowingDotTap(sabotage.glowingDot);
+        // Randomly determine result and fire handler immediately (opponent sees effect right away)
+        const targetIndex = Math.floor(Math.random() * ROULETTE_ICONS.length);
+        const chosenIcon = ROULETTE_ICONS[targetIndex];
+        console.log('[SABOTAGE] Glowing dot tapped! Chosen icon:', chosenIcon, 'for dot:', sabotage.glowingDot);
+        GameService.handleGlowingDotTap(sabotage.glowingDot, chosenIcon);
+        // Start visual-only settle animation for the tapper's screen
+        beginRouletteSettle(targetIndex);
         return true;
     }
 
