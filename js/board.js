@@ -57,8 +57,8 @@ let missPenaltyFlashPhase = 0;
 let rouletteIconIndex = 0;
 let roulettePhase = 0;
 const ROULETTE_ICONS = ['prohibit', 'sabotage', 'anchor'];
-const ROULETTE_CYCLE_MS = 833; // Time per icon cycle in ms (desktop)
-const ROULETTE_CYCLE_MS_MOBILE = 500; // Time per icon cycle in ms (mobile, faster)
+const ROULETTE_CYCLE_MS = 417; // Time per icon cycle in ms (desktop)
+const ROULETTE_CYCLE_MS_MOBILE = 250; // Time per icon cycle in ms (mobile, faster)
 let lastAnimationTime = 0; // For time-based animation
 
 // Mobile detection
@@ -1396,12 +1396,12 @@ function onRouletteAppeared(dotKey) {
     if (typeof showNotification === 'function') {
         showNotification(html, 3000, {
             html: true,
-            dismissButton: true,
-            onDismiss: function(dismissedByButton) {
+            swipeDismiss: true,
+            onDismiss: function(dismissedIntentionally) {
                 stopRouletteTooltipAnimation();
                 rouletteTooltipVisible = false;
-                // Only permanently dismiss if user tapped the X button
-                if (dismissedByButton) {
+                // Only permanently dismiss if user swiped up (intentional)
+                if (dismissedIntentionally) {
                     dismissRouletteTooltipPermanently();
                 }
             }

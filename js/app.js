@@ -551,6 +551,7 @@ let persistentNotificationDismissHandler = null;
  * @param {object} [options] - Optional settings
  * @param {boolean} [options.html] - If true, set innerHTML instead of textContent
  * @param {boolean} [options.dismissButton] - If true, show an X dismiss button
+ * @param {boolean} [options.swipeDismiss] - If true, enable swipe-up to dismiss (counts as intentional)
  * @param {function} [options.onDismiss] - Callback when notification is dismissed
  */
 function showNotification(message, duration = 2000, options = {}) {
@@ -599,6 +600,61 @@ function showNotification(message, duration = 2000, options = {}) {
         });
         notificationEl.appendChild(btn);
         notificationEl.style.pointerEvents = 'auto';
+    }
+
+    // Add swipe-up dismiss if requested
+    let swipeCleanup = null;
+    if (options.swipeDismiss) {
+        notificationEl.style.pointerEvents = 'auto';
+        let touchStartY = null;
+        const SWIPE_THRESHOLD = 30; // Minimum upward distance in px
+
+        function onTouchStart(e) {
+            touchStartY = e.touches[0].clientY;
+        }
+        function onTouchEnd(e) {
+            if (touchStartY !== null) {
+                const deltaY = touchStartY - e.changedTouches[0].clientY;
+                if (deltaY > SWIPE_THRESHOLD) {
+                    // Swiped up — counts as intentional dismiss
+                    dismissNotification(true);
+                }
+                touchStartY = null;
+            }
+        }
+        // Also support mouse drag-up for desktop
+        let mouseStartY = null;
+        function onMouseDown(e) {
+            mouseStartY = e.clientY;
+        }
+        function onMouseUp(e) {
+            if (mouseStartY !== null) {
+                const deltaY = mouseStartY - e.clientY;
+                if (deltaY > SWIPE_THRESHOLD) {
+                    dismissNotification(true);
+                }
+                mouseStartY = null;
+            }
+        }
+
+        notificationEl.addEventListener('touchstart', onTouchStart, { passive: true });
+        notificationEl.addEventListener('touchend', onTouchEnd, { passive: true });
+        notificationEl.addEventListener('mousedown', onMouseDown);
+        notificationEl.addEventListener('mouseup', onMouseUp);
+
+        swipeCleanup = function() {
+            notificationEl.removeEventListener('touchstart', onTouchStart);
+            notificationEl.removeEventListener('touchend', onTouchEnd);
+            notificationEl.removeEventListener('mousedown', onMouseDown);
+            notificationEl.removeEventListener('mouseup', onMouseUp);
+        };
+
+        // Wrap dismissNotification to clean up swipe listeners
+        const originalDismiss = dismissNotification;
+        dismissNotification = function(byButton) {
+            if (swipeCleanup) swipeCleanup();
+            originalDismiss(byButton);
+        };
     }
 
     notificationEl.classList.remove('hidden');
