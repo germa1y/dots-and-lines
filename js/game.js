@@ -45,6 +45,7 @@ let nextGlowTimer = null;
 let anchorTimeoutTimer = null;
 const ANCHOR_TIMEOUT_DURATION = 3000; // 3 seconds if no valid moves
 let pendingSabotageDotKey = null; // Stored for deferred destruction after settle animation
+let noMovesSkipTimer = null; // Timer for auto-skip when no legal moves
 
 /**
  * Initialize a game session
@@ -122,6 +123,9 @@ function handleGameStateUpdate(newState) {
     sabotageState = { ...newState.sabotage };
     handleSabotageStateUpdate(oldSabotage);
   }
+
+  // Check if we should auto-skip due to no legal moves
+  checkAndAutoSkipIfNoMoves();
 
   console.log('Game state updated:', gameState);
 }
@@ -629,6 +633,10 @@ function cleanupGameSession() {
     clearTimeout(anchorTimeoutTimer);
     anchorTimeoutTimer = null;
   }
+  if (noMovesSkipTimer) {
+    clearTimeout(noMovesSkipTimer);
+    noMovesSkipTimer = null;
+  }
 
   gameState = null;
   currentGameId = null;
@@ -902,6 +910,82 @@ function dotHasAvailableLine(row, col) {
   if (row > 0 && lines[`${row - 1},${col},v`] === undefined) return true;
 
   return false;
+}
+
+/**
+ * Check if the current player has any legal move available
+ * Considers: existing lines, prohibited dot, and anchor restriction
+ * @returns {boolean}
+ */
+function hasAnyLegalMove() {
+  if (!gameState) return false;
+  const gridSize = gameState.gridSize || 6;
+  const lines = gameState.lines || {};
+
+  // If anchor is active, only lines from the anchored dot are valid
+  if (sabotageState.anchoredDot) {
+    const [aRow, aCol] = sabotageState.anchoredDot.split(',').map(Number);
+    // Right
+    if (aCol < gridSize - 1 && lines[`${aRow},${aCol},h`] === undefined && !isLineProhibited(aRow, aCol, 'h')) return true;
+    // Down
+    if (aRow < gridSize - 1 && lines[`${aRow},${aCol},v`] === undefined && !isLineProhibited(aRow, aCol, 'v')) return true;
+    // Left
+    if (aCol > 0 && lines[`${aRow},${aCol - 1},h`] === undefined && !isLineProhibited(aRow, aCol - 1, 'h')) return true;
+    // Up
+    if (aRow > 0 && lines[`${aRow - 1},${aCol},v`] === undefined && !isLineProhibited(aRow - 1, aCol, 'v')) return true;
+    return false;
+  }
+
+  // No anchor — check every possible line on the grid
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      // Horizontal line from (row, col) to (row, col+1)
+      if (col < gridSize - 1 && lines[`${row},${col},h`] === undefined && !isLineProhibited(row, col, 'h')) return true;
+      // Vertical line from (row, col) to (row+1, col)
+      if (row < gridSize - 1 && lines[`${row},${col},v`] === undefined && !isLineProhibited(row, col, 'v')) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if we should auto-skip due to no legal moves and perform the skip
+ * Called after every game state update when it's our turn
+ */
+function checkAndAutoSkipIfNoMoves() {
+  // Only check if it's our turn and game is active
+  if (!isMyTurn() || !gameState || gameState.status !== 'active') return;
+
+  // Don't skip if anchor is active (let anchor timeout handle it first)
+  if (sabotageState.anchoredDot) return;
+
+  // Don't skip if there's a pending roulette settle
+  if (pendingSabotageDotKey) return;
+
+  if (!hasAnyLegalMove()) {
+    // Cancel any existing skip timer (prevent duplicates)
+    if (noMovesSkipTimer) {
+      clearTimeout(noMovesSkipTimer);
+    }
+
+    console.log('[AUTO-SKIP] No legal moves detected, auto-skipping turn');
+
+    if (typeof showNotification === 'function') {
+      showNotification('No moves remaining. Turn skipped.');
+    }
+
+    // Auto-advance after a brief delay so the notification is visible
+    noMovesSkipTimer = setTimeout(async () => {
+      noMovesSkipTimer = null;
+      // Re-verify conditions before advancing
+      if (isMyTurn() && gameState && gameState.status === 'active') {
+        const nextPlayer = (gameState.currentPlayerIndex + 1) % gameState.playerCount;
+        await FirebaseService.updateGameState(currentGameId, {
+          currentPlayerIndex: nextPlayer
+        });
+      }
+    }, 1500);
+  }
 }
 
 /**
