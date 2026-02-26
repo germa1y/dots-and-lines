@@ -3105,6 +3105,7 @@ let roulettePreviewIndex = 0;
 let roulettePreviewPhase = 0;
 let roulettePreviewPulsePhase = 0;
 let roulettePreviewAnimationId = null;
+let lastPreviewAnimationTime = 0;
 
 /**
  * Draw roulette preview with animation
@@ -3257,8 +3258,13 @@ function drawRouletteAnchorPreview(pctx, x, y, scale) {
  * Animate the roulette preview
  */
 function animateRoulettePreview() {
-    roulettePreviewPulsePhase += 0.15;
-    roulettePreviewPhase += ROULETTE_CYCLE_SPEED;
+    const now = performance.now();
+    const deltaTime = lastPreviewAnimationTime > 0 ? Math.min(now - lastPreviewAnimationTime, 100) : 16;
+    lastPreviewAnimationTime = now;
+
+    const cycleMs = isMobileDevice ? ROULETTE_CYCLE_MS_MOBILE : ROULETTE_CYCLE_MS;
+    roulettePreviewPulsePhase += (deltaTime / 1000) * Math.PI * 4;
+    roulettePreviewPhase += deltaTime / cycleMs;
 
     if (roulettePreviewPhase >= 1) {
         roulettePreviewPhase = 0;
