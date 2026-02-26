@@ -1478,8 +1478,12 @@ function drawSabotageElements() {
             return;
         }
 
+        // During settle animation, hide the outcome icon on the settle dot
+        // so it doesn't spoil the result before the animation finishes
+        const settleDotKey = rouletteSettling ? rouletteSettleRow + ',' + rouletteSettleCol : null;
+
         // Draw prohibited symbol (visible to ALL players)
-        if (sabotage.prohibitedDot) {
+        if (sabotage.prohibitedDot && sabotage.prohibitedDot !== settleDotKey) {
             const parts = sabotage.prohibitedDot.split(',');
             if (parts.length === 2) {
                 const row = parseInt(parts[0], 10);
@@ -1492,7 +1496,7 @@ function drawSabotageElements() {
         }
 
         // Draw anchor symbol (visible to ALL players)
-        if (sabotage.anchoredDot) {
+        if (sabotage.anchoredDot && sabotage.anchoredDot !== settleDotKey) {
             const parts = sabotage.anchoredDot.split(',');
             if (parts.length === 2) {
                 const row = parseInt(parts[0], 10);
@@ -1505,7 +1509,7 @@ function drawSabotageElements() {
         }
 
         // Draw sabotage symbol (bomb icon visible to ALL players during sabotage effect)
-        if (sabotage.sabotagedDot) {
+        if (sabotage.sabotagedDot && sabotage.sabotagedDot !== settleDotKey) {
             const parts = sabotage.sabotagedDot.split(',');
             if (parts.length === 2) {
                 const row = parseInt(parts[0], 10);
