@@ -44,6 +44,7 @@ let glowExpiryTimer = null;
 let nextGlowTimer = null;
 let anchorTimeoutTimer = null;
 const ANCHOR_TIMEOUT_DURATION = 3000; // 3 seconds if no valid moves
+let pendingSabotageDotKey = null; // Stored for deferred destruction after settle animation
 
 /**
  * Initialize a game session
@@ -994,18 +995,26 @@ async function handleGlowingDotTap(dotKey, rouletteIcon) {
   // Apply the roulette effect (marks the dot, blocks new glows)
   await FirebaseService.tapGlowingDot(currentGameId, dotKey, tappingPlayerId, nextPlayer, rouletteIcon);
 
-  // For sabotage, delay the destructive effects until after the roulette
-  // settle animation completes (~2.3s max) so lines aren't destroyed
-  // before the tapper sees the result
+  // Store pending sabotage info for deferred destruction (triggered by settle animation callback)
   if (rouletteIcon === 'sabotage') {
-    console.log('[ROULETTE] Scheduling sabotage destruction in 2500ms (after settle animation)');
-    setTimeout(async () => {
-      // Re-check that sabotage is still active (turn hasn't changed)
-      if (sabotageState.sabotagedDot === dotKey) {
-        const destructiveUpdates = calculateSabotageEffect(dotKey);
-        await FirebaseService.applySabotageEffects(currentGameId, destructiveUpdates);
-      }
-    }, 2500);
+    pendingSabotageDotKey = dotKey;
+    console.log('[ROULETTE] Sabotage destruction deferred until settle animation completes');
+  }
+}
+
+/**
+ * Called by board.js when the roulette settle animation finishes.
+ * Applies any deferred effects (sabotage line destruction).
+ */
+async function onRouletteSettleComplete() {
+  if (pendingSabotageDotKey) {
+    const dotKey = pendingSabotageDotKey;
+    pendingSabotageDotKey = null;
+    console.log('[ROULETTE] Settle complete, applying sabotage destruction for:', dotKey);
+    if (sabotageState.sabotagedDot === dotKey) {
+      const destructiveUpdates = calculateSabotageEffect(dotKey);
+      await FirebaseService.applySabotageEffects(currentGameId, destructiveUpdates);
+    }
   }
 }
 
@@ -1224,6 +1233,7 @@ window.GameService = {
   getSabotageState: getSabotageState,
   isLineProhibited: isLineProhibited,
   handleGlowingDotTap: handleGlowingDotTap,
+  onRouletteSettleComplete: onRouletteSettleComplete,
   isSabotageAnimationEnabled: isSabotageAnimationEnabled,
   triggerMissPenalty: triggerMissPenalty,
   isMissPenaltyActive: isMissPenaltyActive,

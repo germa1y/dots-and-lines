@@ -72,6 +72,7 @@ let rouletteSettleStepIndex = 0;
 let rouletteSettleAccum = 0; // time accumulator for current step
 let rouletteSettleRow = -1; // dot row to keep rendering during settle
 let rouletteSettleCol = -1; // dot col to keep rendering during settle
+let rouletteSettleCallback = null; // called when settle animation finishes
 
 /**
  * Create or update the pulse debug control panel
@@ -1300,8 +1301,9 @@ function getCurrentRouletteIcon() {
  * The game effect has already been applied; this just animates the icon
  * cycling down to the chosen result for the tapper's screen.
  * @param {number} targetIndex - Index into ROULETTE_ICONS to land on
+ * @param {function} [onComplete] - Optional callback fired when animation finishes
  */
-function beginRouletteSettle(targetIndex) {
+function beginRouletteSettle(targetIndex, onComplete) {
     if (rouletteSettling) return; // Already settling
 
     // Calculate steps to land on target: at least 3 full cycles for anticipation
@@ -1331,6 +1333,7 @@ function beginRouletteSettle(targetIndex) {
     rouletteSettleSteps = steps;
     rouletteSettleStepIndex = 0;
     rouletteSettleAccum = 0;
+    rouletteSettleCallback = onComplete || null;
 }
 
 /**
@@ -1369,7 +1372,10 @@ function animateGlowingDot() {
                 rouletteSettling = false;
                 rouletteSettleRow = -1;
                 rouletteSettleCol = -1;
+                const callback = rouletteSettleCallback;
+                rouletteSettleCallback = null;
                 console.log('[ROULETTE] Settle animation complete, landed on:', ROULETTE_ICONS[rouletteIconIndex]);
+                if (callback) callback();
             }
         }
     } else {
@@ -1617,10 +1623,14 @@ function checkGlowingDotTap(x, y) {
         const chosenIcon = ROULETTE_ICONS[targetIndex];
         console.log('[SABOTAGE] Glowing dot tapped! Chosen icon:', chosenIcon, 'for dot:', sabotage.glowingDot);
         GameService.handleGlowingDotTap(sabotage.glowingDot, chosenIcon);
-        // Start visual-only settle animation for the tapper's screen
+        // Start visual-only settle animation; deferred effects fire via callback when it finishes
         rouletteSettleRow = glowRow;
         rouletteSettleCol = glowCol;
-        beginRouletteSettle(targetIndex);
+        beginRouletteSettle(targetIndex, function() {
+            if (GameService.onRouletteSettleComplete) {
+                GameService.onRouletteSettleComplete();
+            }
+        });
         return true;
     }
 
