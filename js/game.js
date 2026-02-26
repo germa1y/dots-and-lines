@@ -1030,24 +1030,36 @@ function calculateSabotageEffect(dotKey) {
   const boxes = gameState?.boxes || {};
   const updates = {};
 
-  // Find all lines connected to this dot
+  // Find all lines connected to this dot (skip own lines — no friendly fire)
   const connectedLines = [];
 
   // Right (horizontal from this dot)
   if (col < gridSize - 1 && lines[`${row},${col},h`] !== undefined) {
-    connectedLines.push({ key: `${row},${col},h`, owner: lines[`${row},${col},h`] });
+    const owner = lines[`${row},${col},h`];
+    if (owner !== localPlayerIndex) {
+      connectedLines.push({ key: `${row},${col},h`, owner: owner });
+    }
   }
   // Down (vertical from this dot)
   if (row < gridSize - 1 && lines[`${row},${col},v`] !== undefined) {
-    connectedLines.push({ key: `${row},${col},v`, owner: lines[`${row},${col},v`] });
+    const owner = lines[`${row},${col},v`];
+    if (owner !== localPlayerIndex) {
+      connectedLines.push({ key: `${row},${col},v`, owner: owner });
+    }
   }
   // Left (horizontal from left neighbor)
   if (col > 0 && lines[`${row},${col - 1},h`] !== undefined) {
-    connectedLines.push({ key: `${row},${col - 1},h`, owner: lines[`${row},${col - 1},h`] });
+    const owner = lines[`${row},${col - 1},h`];
+    if (owner !== localPlayerIndex) {
+      connectedLines.push({ key: `${row},${col - 1},h`, owner: owner });
+    }
   }
   // Up (vertical from top neighbor)
   if (row > 0 && lines[`${row - 1},${col},v`] !== undefined) {
-    connectedLines.push({ key: `${row - 1},${col},v`, owner: lines[`${row - 1},${col},v`] });
+    const owner = lines[`${row - 1},${col},v`];
+    if (owner !== localPlayerIndex) {
+      connectedLines.push({ key: `${row - 1},${col},v`, owner: owner });
+    }
   }
 
   console.log('[SABOTAGE] Found connected lines:', connectedLines);

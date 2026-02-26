@@ -533,10 +533,14 @@ let persistentNotificationDismissHandler = null;
 
 /**
  * Show a notification message to the user
- * @param {string} message - Message to display
+ * @param {string} message - Message to display (text or HTML if options.html is true)
  * @param {number|boolean} duration - Duration in ms (default 2000), or true for persistent until tap/click
+ * @param {object} [options] - Optional settings
+ * @param {boolean} [options.html] - If true, set innerHTML instead of textContent
+ * @param {boolean} [options.dismissButton] - If true, show an X dismiss button
+ * @param {function} [options.onDismiss] - Callback when notification is dismissed
  */
-function showNotification(message, duration = 2000) {
+function showNotification(message, duration = 2000, options = {}) {
     // Check if notification element exists, create if not
     let notificationEl = document.getElementById('game-notification');
 
@@ -554,20 +558,42 @@ function showNotification(message, duration = 2000) {
         persistentNotificationDismissHandler = null;
     }
 
-    // Set message and show
-    notificationEl.textContent = message;
+    function dismissNotification() {
+        notificationEl.classList.remove('show');
+        notificationEl.classList.add('hidden');
+        notificationEl.style.pointerEvents = '';
+        document.removeEventListener('click', persistentNotificationDismissHandler);
+        document.removeEventListener('touchstart', persistentNotificationDismissHandler);
+        persistentNotificationDismissHandler = null;
+        if (options.onDismiss) options.onDismiss();
+    }
+
+    // Set message content
+    if (options.html) {
+        notificationEl.innerHTML = message;
+    } else {
+        notificationEl.textContent = message;
+    }
+
+    // Add dismiss button if requested
+    if (options.dismissButton) {
+        const btn = document.createElement('button');
+        btn.className = 'notification-dismiss';
+        btn.textContent = '\u00D7'; // multiplication sign (x)
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            dismissNotification();
+        });
+        notificationEl.appendChild(btn);
+        notificationEl.style.pointerEvents = 'auto';
+    }
+
     notificationEl.classList.remove('hidden');
     notificationEl.classList.add('show');
 
     if (duration === true) {
         // Persistent notification - dismiss on any tap/click
-        persistentNotificationDismissHandler = function dismissNotification() {
-            notificationEl.classList.remove('show');
-            notificationEl.classList.add('hidden');
-            document.removeEventListener('click', persistentNotificationDismissHandler);
-            document.removeEventListener('touchstart', persistentNotificationDismissHandler);
-            persistentNotificationDismissHandler = null;
-        };
+        persistentNotificationDismissHandler = dismissNotification;
         // Use setTimeout to avoid immediate dismissal from the same event
         setTimeout(() => {
             document.addEventListener('click', persistentNotificationDismissHandler);
@@ -575,9 +601,6 @@ function showNotification(message, duration = 2000) {
         }, 100);
     } else {
         // Auto-hide after duration
-        setTimeout(() => {
-            notificationEl.classList.remove('show');
-            notificationEl.classList.add('hidden');
-        }, duration);
+        setTimeout(dismissNotification, duration);
     }
 }

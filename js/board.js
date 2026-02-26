@@ -1135,157 +1135,160 @@ function drawGlowingDot(row, col) {
 /**
  * Draw prohibit icon for roulette (at any position)
  */
-function drawRouletteProhibit(x, y, scale) {
+function drawRouletteProhibit(x, y, scale, targetCtx) {
+    const c = targetCtx || ctx;
     const radius = DOT_RADIUS * 2 * scale;
 
-    ctx.save();
-    ctx.lineCap = 'round';
+    c.save();
+    c.lineCap = 'round';
 
     // Black outline circle
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.stroke();
+    c.strokeStyle = '#000000';
+    c.lineWidth = 8;
+    c.beginPath();
+    c.arc(x, y, radius, 0, Math.PI * 2);
+    c.stroke();
 
     // Black outline diagonal line
-    ctx.beginPath();
-    ctx.moveTo(x - radius * 0.7, y - radius * 0.7);
-    ctx.lineTo(x + radius * 0.7, y + radius * 0.7);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x - radius * 0.7, y - radius * 0.7);
+    c.lineTo(x + radius * 0.7, y + radius * 0.7);
+    c.stroke();
 
     // Red circle on top
-    ctx.strokeStyle = '#BF3333';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.stroke();
+    c.strokeStyle = '#BF3333';
+    c.lineWidth = 6;
+    c.beginPath();
+    c.arc(x, y, radius, 0, Math.PI * 2);
+    c.stroke();
 
     // Red diagonal line
-    ctx.beginPath();
-    ctx.moveTo(x - radius * 0.7, y - radius * 0.7);
-    ctx.lineTo(x + radius * 0.7, y + radius * 0.7);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x - radius * 0.7, y - radius * 0.7);
+    c.lineTo(x + radius * 0.7, y + radius * 0.7);
+    c.stroke();
 
-    ctx.restore();
+    c.restore();
 }
 
 /**
  * Draw sabotage (bomb) icon for roulette - rotated 45 degrees
  */
-function drawRouletteSabotage(x, y, scale) {
+function drawRouletteSabotage(x, y, scale, targetCtx) {
+    const c = targetCtx || ctx;
     const radius = DOT_RADIUS * 1.8 * scale;
 
-    ctx.save();
+    c.save();
 
     // Rotate 45 degrees clockwise around icon center
-    ctx.translate(x, y);
-    ctx.rotate(Math.PI / 4);
-    ctx.translate(-x, -y);
+    c.translate(x, y);
+    c.rotate(Math.PI / 4);
+    c.translate(-x, -y);
 
     // Bomb body (black circle)
-    ctx.fillStyle = '#222222';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    c.fillStyle = '#222222';
+    c.strokeStyle = '#000000';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.arc(x, y, radius, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
 
     // Highlight reflection
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.beginPath();
-    ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.25, 0, Math.PI * 2);
-    ctx.fill();
+    c.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    c.beginPath();
+    c.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.25, 0, Math.PI * 2);
+    c.fill();
 
     // Fuse stem
-    ctx.strokeStyle = '#666666';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x, y - radius);
-    ctx.lineTo(x, y - radius - 5);
-    ctx.stroke();
+    c.strokeStyle = '#666666';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.moveTo(x, y - radius);
+    c.lineTo(x, y - radius - 5);
+    c.stroke();
 
     // Fuse spark/flame
-    ctx.fillStyle = '#FF6600';
-    ctx.beginPath();
-    ctx.arc(x, y - radius - 7, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#FFCC00';
-    ctx.beginPath();
-    ctx.arc(x, y - radius - 7, 2, 0, Math.PI * 2);
-    ctx.fill();
+    c.fillStyle = '#FF6600';
+    c.beginPath();
+    c.arc(x, y - radius - 7, 4, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#FFCC00';
+    c.beginPath();
+    c.arc(x, y - radius - 7, 2, 0, Math.PI * 2);
+    c.fill();
 
-    ctx.restore();
+    c.restore();
 }
 
 /**
  * Draw anchor icon for roulette
  */
-function drawRouletteAnchor(x, y, scale) {
+function drawRouletteAnchor(x, y, scale, targetCtx) {
+    const c = targetCtx || ctx;
     const s = scale * 0.9; // Base scale
 
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    c.save();
+    c.lineCap = 'round';
+    c.lineJoin = 'round';
 
     // Black outline first
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 8;
+    c.strokeStyle = '#000000';
+    c.lineWidth = 8;
 
     // Ring at top
-    ctx.beginPath();
-    ctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
-    ctx.stroke();
+    c.beginPath();
+    c.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    c.stroke();
 
     // Vertical shaft
-    ctx.beginPath();
-    ctx.moveTo(x, y - 6 * s);
-    ctx.lineTo(x, y + 10 * s);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x, y - 6 * s);
+    c.lineTo(x, y + 10 * s);
+    c.stroke();
 
     // Horizontal bar (cross piece)
-    ctx.beginPath();
-    ctx.moveTo(x - 8 * s, y - 2 * s);
-    ctx.lineTo(x + 8 * s, y - 2 * s);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x - 8 * s, y - 2 * s);
+    c.lineTo(x + 8 * s, y - 2 * s);
+    c.stroke();
 
     // Curved bottom flukes
-    ctx.beginPath();
-    ctx.moveTo(x - 10 * s, y + 4 * s);
-    ctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
-    ctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x - 10 * s, y + 4 * s);
+    c.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    c.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    c.stroke();
 
     // Teal fill on top
-    ctx.strokeStyle = '#4ECDC4';
-    ctx.lineWidth = 5;
+    c.strokeStyle = '#4ECDC4';
+    c.lineWidth = 5;
 
     // Ring at top
-    ctx.beginPath();
-    ctx.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
-    ctx.stroke();
+    c.beginPath();
+    c.arc(x, y - 10 * s, 4 * s, 0, Math.PI * 2);
+    c.stroke();
 
     // Vertical shaft
-    ctx.beginPath();
-    ctx.moveTo(x, y - 6 * s);
-    ctx.lineTo(x, y + 10 * s);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x, y - 6 * s);
+    c.lineTo(x, y + 10 * s);
+    c.stroke();
 
     // Horizontal bar
-    ctx.beginPath();
-    ctx.moveTo(x - 8 * s, y - 2 * s);
-    ctx.lineTo(x + 8 * s, y - 2 * s);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x - 8 * s, y - 2 * s);
+    c.lineTo(x + 8 * s, y - 2 * s);
+    c.stroke();
 
     // Curved bottom flukes
-    ctx.beginPath();
-    ctx.moveTo(x - 10 * s, y + 4 * s);
-    ctx.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
-    ctx.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
-    ctx.stroke();
+    c.beginPath();
+    c.moveTo(x - 10 * s, y + 4 * s);
+    c.quadraticCurveTo(x - 10 * s, y + 12 * s, x, y + 10 * s);
+    c.quadraticCurveTo(x + 10 * s, y + 12 * s, x + 10 * s, y + 4 * s);
+    c.stroke();
 
-    ctx.restore();
+    c.restore();
 }
 
 /**
@@ -1334,6 +1337,94 @@ function beginRouletteSettle(targetIndex, onComplete) {
     rouletteSettleStepIndex = 0;
     rouletteSettleAccum = 0;
     rouletteSettleCallback = onComplete || null;
+}
+
+/**
+ * Show a one-time tooltip explaining the roulette mechanic.
+ * Displays "Tap the roulette [animated icons] to sabotage!" with an
+ * inline canvas cycling through the three roulette icons.
+ * Only shown once per device (persisted via localStorage).
+ */
+let rouletteTooltipShown = false; // Session guard to prevent re-triggering
+function showRouletteTooltip() {
+    if (rouletteTooltipShown) return;
+    if (localStorage.getItem('roulette-tooltip-shown')) return;
+    rouletteTooltipShown = true;
+    localStorage.setItem('roulette-tooltip-shown', '1');
+
+    // Build the notification HTML with an inline canvas
+    const canvasSize = 28;
+    const html = '<span style="vertical-align:middle">Tap the roulette </span>' +
+        '<canvas id="roulette-tooltip-canvas" class="roulette-tooltip-canvas" ' +
+        'width="' + canvasSize + '" height="' + canvasSize + '"></canvas>' +
+        '<span style="vertical-align:middle"> to sabotage!</span>';
+
+    if (typeof showNotification === 'function') {
+        showNotification(html, 8000, {
+            html: true,
+            dismissButton: true,
+            onDismiss: function() { stopTooltipAnimation(); }
+        });
+    }
+
+    // Start animating the inline canvas after a brief delay for DOM insertion
+    let tooltipIconIndex = 0;
+    let tooltipPhase = 0;
+    let tooltipPulsePhase = 0;
+    let tooltipAnimId = null;
+    let tooltipLastTime = 0;
+
+    function stopTooltipAnimation() {
+        if (tooltipAnimId) {
+            cancelAnimationFrame(tooltipAnimId);
+            tooltipAnimId = null;
+        }
+    }
+
+    setTimeout(function() {
+        const tc = document.getElementById('roulette-tooltip-canvas');
+        if (!tc) return;
+        const tctx = tc.getContext('2d');
+        tooltipLastTime = performance.now();
+
+        function animateTooltip() {
+            const now = performance.now();
+            const dt = Math.min(now - tooltipLastTime, 100);
+            tooltipLastTime = now;
+
+            const cycleMs = isMobileDevice ? ROULETTE_CYCLE_MS_MOBILE : ROULETTE_CYCLE_MS;
+            tooltipPulsePhase += (dt / 1000) * Math.PI * 4;
+            tooltipPhase += dt / cycleMs;
+            if (tooltipPhase >= 1) {
+                tooltipPhase = 0;
+                tooltipIconIndex = (tooltipIconIndex + 1) % ROULETTE_ICONS.length;
+            }
+
+            // Clear and draw
+            tctx.clearRect(0, 0, canvasSize, canvasSize);
+            tctx.save();
+            const scale = canvasSize / 30; // Icon functions designed for ~30px range
+            const cx = canvasSize / 2;
+            const cy = canvasSize / 2;
+            const pulse = 1 - 0.15 * (0.5 + 0.5 * Math.sin(tooltipPulsePhase));
+
+            switch (ROULETTE_ICONS[tooltipIconIndex]) {
+                case 'prohibit':
+                    drawRouletteProhibit(cx, cy, pulse * scale, tctx);
+                    break;
+                case 'sabotage':
+                    drawRouletteSabotage(cx, cy, pulse * scale, tctx);
+                    break;
+                case 'anchor':
+                    drawRouletteAnchor(cx, cy, pulse * scale, tctx);
+                    break;
+            }
+            tctx.restore();
+
+            tooltipAnimId = requestAnimationFrame(animateTooltip);
+        }
+        animateTooltip();
+    }, 50);
 }
 
 /**
@@ -1543,6 +1634,8 @@ function drawSabotageElements() {
                 if (!isNaN(row) && !isNaN(col)) {
                     drawGlowingDot(row, col);
                     needsAnimation = true;
+                    // Show tooltip on first roulette appearance
+                    showRouletteTooltip();
                 }
             }
         }
