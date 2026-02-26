@@ -994,16 +994,18 @@ async function handleGlowingDotTap(dotKey, rouletteIcon) {
   // Apply the roulette effect (marks the dot, blocks new glows)
   await FirebaseService.tapGlowingDot(currentGameId, dotKey, tappingPlayerId, nextPlayer, rouletteIcon);
 
-  // For sabotage, delay the destructive effects by 0.5 seconds
+  // For sabotage, delay the destructive effects until after the roulette
+  // settle animation completes (~2.3s max) so lines aren't destroyed
+  // before the tapper sees the result
   if (rouletteIcon === 'sabotage') {
-    console.log('[ROULETTE] Scheduling sabotage destruction in 500ms');
+    console.log('[ROULETTE] Scheduling sabotage destruction in 2500ms (after settle animation)');
     setTimeout(async () => {
       // Re-check that sabotage is still active (turn hasn't changed)
       if (sabotageState.sabotagedDot === dotKey) {
         const destructiveUpdates = calculateSabotageEffect(dotKey);
         await FirebaseService.applySabotageEffects(currentGameId, destructiveUpdates);
       }
-    }, 500);
+    }, 2500);
   }
 }
 
